@@ -1,0 +1,19 @@
+log
+.DS_Store
+output
+# 忽略根目录下e_tars_rpc的二进制产物
+/e_tars_rpc
+/e_tars_rpc_server
+.idea
+.vscode
+.vscode/launch.json
+.clinerules/byterover-rules.md
+.kilocode/rules/byterover-rules.md
+.roo/rules/byterover-rules.md
+.windsurf/rules/byterover-rules.md
+.cursor/rules/byterover-rules.mdc
+.kiro/steering/byterover-rules.md
+.qoder/rules/byterover-rules.md
+.augment/rules/byterover-rules.md
+.vscode/launch.json
+.trae/documents
