@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/openharness/openharness/pkg/services"
 	"github.com/openharness/openharness/pkg/tools"
 	"github.com/openharness/openharness/pkg/types"
 )
@@ -58,8 +59,9 @@ type QueryEngine struct {
 	maxTurns          int
 	hookExecutor      HookExecutor
 
-	Messages    []types.ConversationMessage
-	costTracker CostTracker
+	Messages       []types.ConversationMessage
+	collapseBuffer []types.ConversationMessage
+	costTracker    CostTracker
 }
 
 // QueryEngineOption is a functional option for NewQueryEngine.
@@ -118,6 +120,44 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) <-chan 
 	msgs := make([]types.ConversationMessage, len(qe.Messages))
 	copy(msgs, qe.Messages)
 
+	var collapseBufferCopy []types.ConversationMessage
+	if qe.collapseBuffer != nil {
+		collapseBufferCopy = make([]types.ConversationMessage, len(qe.collapseBuffer))
+		copy(collapseBufferCopy, qe.collapseBuffer)
+	}
+	qe.mu.Unlock()
+
+	// Run compaction before the loop
+	summarizeFn := func(sCtx context.Context, p string) (string, error) {
+		params := LLMRequestParams{
+			Model:        qe.model,
+			SystemPrompt: "You are a conversation summarizer.",
+			Messages:     []types.ConversationMessage{types.FromUserText(p)},
+			MaxTokens:    4096,
+		}
+		ch, err := qe.apiClient.StreamMessage(sCtx, params)
+		if err != nil {
+			return "", err
+		}
+		var summary string
+		for ev := range ch {
+			if ev.Err != nil {
+				return "", ev.Err
+			}
+			summary += ev.TextDelta
+		}
+		return summary, nil
+	}
+
+	config := services.DefaultCompactionConfig()
+	compactedMsgs, err := services.RunPipeline(ctx, msgs, config, &collapseBufferCopy, summarizeFn)
+	if err == nil {
+		msgs = compactedMsgs
+		qe.mu.Lock()
+		qe.collapseBuffer = collapseBufferCopy
+		qe.mu.Unlock()
+	}
+
 	qctx := &QueryContext{
 		APIClient:         qe.apiClient,
 		ToolRegistry:      qe.toolRegistry,
@@ -130,9 +170,7 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) <-chan 
 		HookExecutor:      qe.hookExecutor,
 	}
 
-	qe.mu.Unlock()
-
-	rawCh := RunQuery(ctx, qctx, msgs)
+	rawCh := RunQuery(ctx, qctx, &msgs)
 	outCh := make(chan StreamEventWithUsage, 64)
 
 	go func() {

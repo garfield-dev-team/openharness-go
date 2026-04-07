@@ -134,7 +134,7 @@ type QueryContext struct {
 // ---------------------------------------------------------------------------
 
 // RunQuery executes the multi-turn agent loop.
-func RunQuery(ctx context.Context, qctx *QueryContext, messages []types.ConversationMessage) <-chan StreamEventWithUsage {
+func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.ConversationMessage) <-chan StreamEventWithUsage {
 	ch := make(chan StreamEventWithUsage, 64)
 
 	maxTurns := qctx.MaxTurns
@@ -149,7 +149,7 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages []types.Conversa
 			params := LLMRequestParams{
 				Model:        qctx.Model,
 				SystemPrompt: qctx.SystemPrompt,
-				Messages:     messages,
+				Messages:     *messages,
 				Tools:        qctx.ToolRegistry.ToAPISchema(),
 				MaxTokens:    qctx.MaxTokens,
 			}
@@ -189,7 +189,7 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages []types.Conversa
 				return
 			}
 
-			messages = append(messages, *assistantMsg)
+			*messages = append(*messages, *assistantMsg)
 
 			ch <- StreamEventWithUsage{
 				Event: StreamEvent{Type: EventAssistantTurnComplete},
@@ -247,7 +247,7 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages []types.Conversa
 					rb.ToolUseID, rb.Content, rb.IsError,
 				))
 			}
-			messages = append(messages, types.ConversationMessage{
+			*messages = append(*messages, types.ConversationMessage{
 				Role:    "user",
 				Content: toolResultContents,
 			})
