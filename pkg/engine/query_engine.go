@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/openharness/openharness/pkg/services"
@@ -139,14 +140,14 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) <-chan 
 		if err != nil {
 			return "", err
 		}
-		var summary string
+		var summary strings.Builder
 		for ev := range ch {
 			if ev.Err != nil {
 				return "", ev.Err
 			}
-			summary += ev.TextDelta
+			summary.WriteString(ev.TextDelta)
 		}
-		return summary, nil
+		return summary.String(), nil
 	}
 
 	config := services.DefaultCompactionConfig()

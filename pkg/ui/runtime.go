@@ -44,7 +44,14 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 		baseURL = *settings.BaseURL
 	}
 
-	apiClient := api.NewAnthropicApiClient(apiKey, baseURL)
+	providerInfo := api.DetectProvider(*settings)
+
+	var apiClient api.MessageStreamer
+	if providerInfo.Name == "openai-compatible" {
+		apiClient = api.NewOpenAIApiClient(apiKey, baseURL)
+	} else {
+		apiClient = api.NewAnthropicApiClient(apiKey, baseURL)
+	}
 
 	toolReg := builtin.CreateDefaultToolRegistry()
 
@@ -71,7 +78,6 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 	}
 	hookExec := hooks.NewHookExecutor(hookReg, hookExecCtx)
 
-	providerInfo := api.DetectProvider(*settings)
 	appState := state.NewAppStateStore(state.AppState{
 		Model:          settings.Model,
 		PermissionMode: string(settings.Permission.Mode),

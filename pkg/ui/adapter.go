@@ -10,7 +10,7 @@ import (
 
 // apiClientAdapter adapts api.AnthropicApiClient to engine.StreamingLLMClient.
 type apiClientAdapter struct {
-	client *api.AnthropicApiClient
+	client api.MessageStreamer
 	model  string
 }
 

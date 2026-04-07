@@ -22,6 +22,9 @@ func DetectProvider(s config.Settings) ProviderInfo {
 	if strings.Contains(baseURL, "moonshot") || strings.HasPrefix(model, "kimi") {
 		return ProviderInfo{Name: "moonshot-anthropic-compatible", AuthKind: "api_key", VoiceReason: "voice mode requires a Claude.ai-style authenticated voice backend"}
 	}
+	if strings.Contains(baseURL, "openai") || strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o1") || strings.HasPrefix(model, "o3") || strings.Contains(baseURL, "deepseek") {
+		return ProviderInfo{Name: "openai-compatible", AuthKind: "api_key", VoiceReason: "voice mode currently requires a dedicated Claude.ai-style provider"}
+	}
 	if strings.Contains(baseURL, "bedrock") {
 		return ProviderInfo{Name: "bedrock-compatible", AuthKind: "aws", VoiceReason: "voice mode is not wired for Bedrock in this build"}
 	}
