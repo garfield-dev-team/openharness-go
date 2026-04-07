@@ -288,7 +288,7 @@ func (c *OpenAIApiClient) streamOnce(
 	}
 
 	scanner := bufio.NewScanner(resp.Body)
-	var fullText string
+	var fullTextBuilder strings.Builder
 	// Tool calls are accumulated incrementally. Map of index to tool call data.
 	toolCallBuilders := make(map[int]*openaiToolCallBuilder)
 	var stopReason string
@@ -322,7 +322,7 @@ func (c *OpenAIApiClient) streamOnce(
 			}
 
 			if choice.Delta.Content != "" {
-				fullText += choice.Delta.Content
+				fullTextBuilder.WriteString(choice.Delta.Content)
 				events <- ApiStreamEvent{
 					TextDelta: &ApiTextDeltaEvent{
 						Text: choice.Delta.Content,
@@ -343,7 +343,7 @@ func (c *OpenAIApiClient) streamOnce(
 					builder.name = tc.Function.Name
 				}
 				if tc.Function.Arguments != "" {
-					builder.arguments += tc.Function.Arguments
+					builder.arguments.WriteString(tc.Function.Arguments)
 				}
 			}
 		}
@@ -354,14 +354,14 @@ func (c *OpenAIApiClient) streamOnce(
 	}
 
 	finalMsg := types.ConversationMessage{Role: "assistant"}
-	if fullText != "" {
-		finalMsg.Content = append(finalMsg.Content, types.NewTextBlock(fullText))
+	if fullTextBuilder.Len() > 0 {
+		finalMsg.Content = append(finalMsg.Content, types.NewTextBlock(fullTextBuilder.String()))
 	}
 	for i := 0; i < len(toolCallBuilders); i++ {
 		builder := toolCallBuilders[i]
 		var input map[string]any
-		if builder.arguments != "" {
-			_ = json.Unmarshal([]byte(builder.arguments), &input)
+		if builder.arguments.Len() > 0 {
+			_ = json.Unmarshal([]byte(builder.arguments.String()), &input)
 		}
 		if input == nil {
 			input = make(map[string]any)
@@ -393,5 +393,5 @@ func (c *OpenAIApiClient) streamOnce(
 type openaiToolCallBuilder struct {
 	id        string
 	name      string
-	arguments string
+	arguments strings.Builder
 }
