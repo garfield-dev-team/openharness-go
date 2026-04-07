@@ -14,6 +14,7 @@ import (
 	"github.com/openharness/openharness/pkg/mcp"
 	"github.com/openharness/openharness/pkg/memory"
 	"github.com/openharness/openharness/pkg/prompts"
+	"github.com/openharness/openharness/pkg/skills"
 	"github.com/openharness/openharness/pkg/state"
 	"github.com/openharness/openharness/pkg/tools"
 	"github.com/openharness/openharness/pkg/tools/builtin"
@@ -46,6 +47,19 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 	apiClient := api.NewAnthropicApiClient(apiKey, baseURL)
 
 	toolReg := builtin.CreateDefaultToolRegistry()
+
+	// Load skills from ~/.openharness/skills and ./skills
+	var loadedSkills []skills.Skill
+	if home, err := os.UserHomeDir(); err == nil {
+		globalSkills, _ := skills.LoadSkills(fmt.Sprintf("%s/.openharness/skills", home))
+		loadedSkills = append(loadedSkills, globalSkills...)
+	}
+	localSkills, _ := skills.LoadSkills(fmt.Sprintf("%s/skills", cwd))
+	loadedSkills = append(loadedSkills, localSkills...)
+
+	if len(loadedSkills) > 0 {
+		toolReg.Register(builtin.NewSkillTool(loadedSkills))
+	}
 
 	mcpConfigs := make(map[string]mcp.McpServerConfig)
 	mcpMgr := mcp.NewMcpClientManager(mcpConfigs)
@@ -82,7 +96,7 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 			claudeMDContent = string(data)
 		}
 	}
-	sysPrompt := prompts.BuildRuntimeSystemPrompt("", cwd, memoryPrompt, "", claudeMDContent)
+	sysPrompt := prompts.BuildRuntimeSystemPrompt("", cwd, memoryPrompt, loadedSkills, claudeMDContent)
 	if settings.SystemPrompt != nil && *settings.SystemPrompt != "" {
 		sysPrompt = *settings.SystemPrompt
 	}

@@ -1,9 +1,8 @@
 log
 .DS_Store
 output
-# 忽略根目录下e_tars_rpc的二进制产物
-/e_tars_rpc
-/e_tars_rpc_server
+# 忽略根目录下openharness的二进制产物
+/openharness
 .idea
 .vscode
 .vscode/launch.json

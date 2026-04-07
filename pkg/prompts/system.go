@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/openharness/openharness/pkg/skills"
 )
 
 // EnvironmentInfo mirrors Python prompts/environment.py.
@@ -90,7 +92,7 @@ func DiscoverClaudeMD(cwd string) []string {
 // BuildRuntimeSystemPrompt assembles the full runtime system prompt from all
 // constituent parts: user-level settings, cwd context, memory, skills, and
 // CLAUDE.md content.
-func BuildRuntimeSystemPrompt(settings, cwd, memory, skills, claudemd string) string {
+func BuildRuntimeSystemPrompt(settings, cwd, memory string, loadedSkills []skills.Skill, claudemd string) string {
 	var sb strings.Builder
 
 	envInfo := GetEnvironmentInfo(cwd)
@@ -108,10 +110,14 @@ func BuildRuntimeSystemPrompt(settings, cwd, memory, skills, claudemd string) st
 		sb.WriteString("\n")
 	}
 
-	if skills != "" {
-		sb.WriteString("\n# Skills\n")
-		sb.WriteString(skills)
-		sb.WriteString("\n")
+	if len(loadedSkills) > 0 {
+		sb.WriteString("\n# Available Skills\n")
+		sb.WriteString("You have access to specialized skills. To invoke a skill, use the `Skill` tool with the exact name.\n")
+		sb.WriteString("<available_skills>\n")
+		for _, s := range loadedSkills {
+			sb.WriteString(fmt.Sprintf("<skill>\n  <name>%s</name>\n  <description>%s</description>\n</skill>\n", s.Name, s.Description))
+		}
+		sb.WriteString("</available_skills>\n")
 	}
 
 	if claudemd != "" {
