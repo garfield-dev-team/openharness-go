@@ -99,6 +99,7 @@ type Settings struct {
 	// API configuration
 	APIKey    string  `json:"api_key"`
 	Model     string  `json:"model"`
+	Provider  string  `json:"provider,omitempty"`
 	MaxTokens int     `json:"max_tokens"`
 	BaseURL   *string `json:"base_url,omitempty"`
 

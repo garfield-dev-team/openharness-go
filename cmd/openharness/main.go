@@ -22,6 +22,7 @@ func main() {
 func newRootCmd() *cobra.Command {
 	var (
 		flagModel          string
+		flagProvider       string
 		flagAPIKey         string
 		flagBaseURL        string
 		flagMaxTokens      int
@@ -47,7 +48,7 @@ func newRootCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("load settings: %w", err)
 			}
-			applyFlags(&settings, flagModel, flagAPIKey, flagBaseURL, flagMaxTokens,
+			applyFlags(&settings, flagModel, flagProvider, flagAPIKey, flagBaseURL, flagMaxTokens,
 				flagSystemPrompt, flagPermissionMode, flagOutputFormat,
 				flagVerbose, flagFast, flagEffort, flagPasses)
 
@@ -77,6 +78,7 @@ func newRootCmd() *cobra.Command {
 
 	f := root.Flags()
 	f.StringVar(&flagModel, "model", "", "Model name")
+	f.StringVar(&flagProvider, "provider", "", "Explicit API provider (e.g. openai-compatible)")
 	f.StringVar(&flagAPIKey, "api-key", "", "API key")
 	f.StringVar(&flagBaseURL, "base-url", "", "Base URL for the API")
 	f.IntVar(&flagMaxTokens, "max-tokens", 0, "Maximum output tokens")
@@ -99,12 +101,15 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-func applyFlags(s *config.Settings, model, apiKey, baseURL string, maxTokens int,
+func applyFlags(s *config.Settings, model, provider, apiKey, baseURL string, maxTokens int,
 	systemPrompt, permissionMode, outputFormat string,
 	verbose, fast bool, effort string, passes int) {
 
 	if model != "" {
 		s.Model = model
+	}
+	if provider != "" {
+		s.Provider = provider
 	}
 	if apiKey != "" {
 		s.APIKey = apiKey

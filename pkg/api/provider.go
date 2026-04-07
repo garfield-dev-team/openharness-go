@@ -16,6 +16,27 @@ type ProviderInfo struct {
 
 // DetectProvider infers the active provider from the current settings.
 func DetectProvider(s config.Settings) ProviderInfo {
+	if s.Provider != "" {
+		providerName := strings.ToLower(s.Provider)
+		authKind := "api_key"
+		voiceReason := "voice mode currently requires a dedicated Claude.ai-style provider"
+		
+		if strings.Contains(providerName, "bedrock") {
+			authKind = "aws"
+			voiceReason = "voice mode is not wired for Bedrock in this build"
+		} else if strings.Contains(providerName, "vertex") || strings.Contains(providerName, "gcp") {
+			authKind = "gcp"
+			voiceReason = "voice mode is not wired for Vertex in this build"
+		}
+
+		return ProviderInfo{
+			Name:           providerName,
+			AuthKind:       authKind,
+			VoiceSupported: false,
+			VoiceReason:    voiceReason,
+		}
+	}
+
 	baseURL := strings.ToLower(derefString(s.BaseURL))
 	model := strings.ToLower(s.Model)
 
