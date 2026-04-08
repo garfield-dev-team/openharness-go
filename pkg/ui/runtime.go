@@ -14,6 +14,7 @@ import (
 	"github.com/openharness/openharness/pkg/mcp"
 	"github.com/openharness/openharness/pkg/memory"
 	"github.com/openharness/openharness/pkg/prompts"
+	"github.com/openharness/openharness/pkg/services"
 	"github.com/openharness/openharness/pkg/skills"
 	"github.com/openharness/openharness/pkg/state"
 	"github.com/openharness/openharness/pkg/tools"
@@ -188,5 +189,19 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 		}
 	}
 	fmt.Println()
+
+	currentTokens := r.Engine.CurrentTokens()
+	threshold := services.DefaultCompactionConfig().TokenThreshold
+	pct := float64(currentTokens) / float64(threshold) * 100
+
+	color := "\033[32m" // green
+	if pct > 80 {
+		color = "\033[31m" // red
+	} else if pct > 50 {
+		color = "\033[33m" // yellow
+	}
+
+	fmt.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
+
 	return nil
 }

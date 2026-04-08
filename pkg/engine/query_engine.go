@@ -223,3 +223,10 @@ func (qe *QueryEngine) LoadMessages(messages []types.ConversationMessage) {
 func (qe *QueryEngine) CostSnapshot() types.UsageSnapshot {
 	return qe.costTracker.Snapshot()
 }
+
+// CurrentTokens returns the estimated number of tokens currently in the conversation history.
+func (qe *QueryEngine) CurrentTokens() int {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	return services.EstimateMessageTokens(qe.Messages)
+}

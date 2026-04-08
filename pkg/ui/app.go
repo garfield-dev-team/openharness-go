@@ -10,6 +10,7 @@ import (
 
 	"github.com/openharness/openharness/pkg/config"
 	"github.com/openharness/openharness/pkg/engine"
+	"github.com/openharness/openharness/pkg/services"
 )
 
 // RunPrintMode runs in non-interactive mode: sends the prompt, prints the
@@ -38,7 +39,22 @@ func RunPrintMode(ctx context.Context, settings *config.Settings, prompt string,
 	case "stream-json":
 		return printStreamJSON(ch)
 	default:
-		return printText(ch)
+		err := printText(ch)
+		if err == nil {
+			currentTokens := rt.Engine.CurrentTokens()
+			threshold := services.DefaultCompactionConfig().TokenThreshold
+			pct := float64(currentTokens) / float64(threshold) * 100
+			
+			color := "\033[32m" // green
+			if pct > 80 {
+				color = "\033[31m" // red
+			} else if pct > 50 {
+				color = "\033[33m" // yellow
+			}
+			
+			fmt.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
+		}
+		return err
 	}
 }
 
@@ -144,9 +160,9 @@ func RunREPL(ctx context.Context, settings *config.Settings) error {
 			continue
 		}
 		if line == "/cost" {
-			snap := rt.Engine.CostSnapshot()
-			fmt.Printf("Tokens used — input: %d, output: %d, total: %d\n",
-				snap.InputTokens, snap.OutputTokens, snap.TotalTokens())
+			currentTokens := rt.Engine.CurrentTokens()
+			threshold := services.DefaultCompactionConfig().TokenThreshold
+			fmt.Printf("Current memory tokens: %d / %d\n", currentTokens, threshold)
 			continue
 		}
 
