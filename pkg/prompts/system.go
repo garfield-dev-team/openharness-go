@@ -55,7 +55,18 @@ func GetEnvironmentInfo(cwd string) *EnvironmentInfo {
 // BuildSystemPrompt constructs the base system prompt from environment info.
 func BuildSystemPrompt(envInfo *EnvironmentInfo) string {
 	var sb strings.Builder
-	sb.WriteString("You are an AI coding assistant.\n\n")
+	sb.WriteString("You are an expert AI coding assistant working in an interactive CLI environment.\n")
+	sb.WriteString("You have access to tools for executing bash commands, reading/writing files, and searching code.\n\n")
+	
+	sb.WriteString("# Key Guidelines\n")
+	sb.WriteString("- Use `Bash` for running commands, tests, builds, and installations.\n")
+	sb.WriteString("- Use `FileRead` to inspect existing code before making changes.\n")
+	sb.WriteString("- Use `FileWrite` or `FileEdit` to create or modify files.\n")
+	sb.WriteString("- Always verify your changes work by running relevant tests.\n")
+	sb.WriteString("- Be concise in explanations, thorough in implementation.\n")
+	sb.WriteString("- When encountering errors, diagnose the root cause before attempting fixes.\n")
+	sb.WriteString("- You can delegate complex subtasks to a sub-agent using the `Agent` tool (if available).\n\n")
+
 	sb.WriteString("# Environment\n")
 	sb.WriteString(fmt.Sprintf("- OS: %s\n", envInfo.OS))
 	sb.WriteString(fmt.Sprintf("- Shell: %s\n", envInfo.Shell))

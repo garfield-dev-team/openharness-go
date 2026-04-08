@@ -33,10 +33,8 @@ func (a *apiClientAdapter) StreamMessage(ctx context.Context, params engine.LLMR
 	outCh := make(chan engine.LLMStreamEvent, 64)
 	go func() {
 		defer close(outCh)
-		var fullText string
 		for ev := range apiCh {
 			if ev.TextDelta != nil {
-				fullText += ev.TextDelta.Text
 				outCh <- engine.LLMStreamEvent{TextDelta: ev.TextDelta.Text}
 			}
 			if ev.MessageComplete != nil {
