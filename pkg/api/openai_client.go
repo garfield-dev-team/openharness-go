@@ -96,8 +96,9 @@ type openaiMessage struct {
 }
 
 type openaiToolCall struct {
-	ID       string             `json:"id"`
-	Type     string             `json:"type"`
+	Index    int                `json:"index,omitempty"`
+	ID       string             `json:"id,omitempty"`
+	Type     string             `json:"type,omitempty"`
 	Function openaiFunctionCall `json:"function"`
 }
 
@@ -330,11 +331,11 @@ func (c *OpenAIApiClient) streamOnce(
 				}
 			}
 
-			for i, tc := range choice.Delta.ToolCalls {
-				builder, ok := toolCallBuilders[i]
+			for _, tc := range choice.Delta.ToolCalls {
+				builder, ok := toolCallBuilders[tc.Index]
 				if !ok {
 					builder = &openaiToolCallBuilder{}
-					toolCallBuilders[i] = builder
+					toolCallBuilders[tc.Index] = builder
 				}
 				if tc.ID != "" {
 					builder.id = tc.ID

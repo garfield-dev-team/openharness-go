@@ -105,11 +105,11 @@ type StreamingLLMClient interface {
 
 // LLMRequestParams contains everything needed for an LLM call.
 type LLMRequestParams struct {
-	Model        string                       `json:"model"`
-	SystemPrompt string                       `json:"system_prompt"`
-	Messages     []types.ConversationMessage  `json:"messages"`
-	Tools        []map[string]any             `json:"tools,omitempty"`
-	MaxTokens    int                          `json:"max_tokens"`
+	Model        string                      `json:"model"`
+	SystemPrompt string                      `json:"system_prompt"`
+	Messages     []types.ConversationMessage `json:"messages"`
+	Tools        []map[string]any            `json:"tools,omitempty"`
+	MaxTokens    int                         `json:"max_tokens"`
 }
 
 // ---------------------------------------------------------------------------

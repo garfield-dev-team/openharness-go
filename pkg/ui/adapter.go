@@ -40,10 +40,8 @@ func (a *apiClientAdapter) StreamMessage(ctx context.Context, params engine.LLMR
 				outCh <- engine.LLMStreamEvent{TextDelta: ev.TextDelta.Text}
 			}
 			if ev.MessageComplete != nil {
-				msg := types.ConversationMessage{
-					Role:    "assistant",
-					Content: []types.ContentBlock{types.NewTextBlock(fullText)},
-				}
+				msg := ev.MessageComplete.Message
+				// Merge the raw string for backward compatibility or let engine use blocks
 				usage := &types.UsageSnapshot{
 					OutputTokens: ev.MessageComplete.Usage.OutputTokens,
 				}

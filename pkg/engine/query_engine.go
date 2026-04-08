@@ -101,7 +101,7 @@ func NewQueryEngine(
 		model:             model,
 		systemPrompt:      systemPrompt,
 		maxTokens:         maxTokens,
-		maxTurns:          8,
+		maxTurns:          100,
 	}
 	for _, o := range opts {
 		o(qe)
