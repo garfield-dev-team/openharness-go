@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openharness/openharness/pkg/services"
 	"github.com/openharness/openharness/pkg/tools"
 	"github.com/openharness/openharness/pkg/types"
 )
@@ -146,6 +147,14 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 		defer close(ch)
 
 		for turn := 0; turn < maxTurns; turn++ {
+			// L1/L2 inline fast compaction within the turn loop
+			// If we generated massive tool results in previous turns, compress them
+			// before sending the next request to prevent token blowout mid-loop.
+			config := services.DefaultCompactionConfig()
+			if services.ShouldCompact(*messages, config) {
+				services.RunPipeline(ctx, *messages, config, nil, nil) // no summarizeFn, so only L1-L4 executes
+			}
+
 			params := LLMRequestParams{
 				Model:        qctx.Model,
 				SystemPrompt: qctx.SystemPrompt,
