@@ -35,6 +35,7 @@ type StreamEvent struct {
 	Text       string            `json:"text,omitempty"`
 	ToolName   string            `json:"tool_name,omitempty"`
 	ToolUseID  string            `json:"tool_use_id,omitempty"`
+	ToolInput  json.RawMessage   `json:"tool_input,omitempty"`
 	ToolResult *tools.ToolResult `json:"tool_result,omitempty"`
 	Error      error             `json:"-"`
 }
@@ -234,6 +235,7 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 						Type:      EventToolExecutionStarted,
 						ToolName:  tu.Name,
 						ToolUseID: tu.ID,
+						ToolInput: tu.Input,
 					}}
 
 					rb := executeToolCall(ctx, qctx, tu.Name, tu.ID, tu.Input)

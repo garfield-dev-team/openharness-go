@@ -47,8 +47,24 @@ func printText(ch <-chan engine.StreamEventWithUsage) error {
 		if ev.Event.Error != nil {
 			return ev.Event.Error
 		}
-		if ev.Event.Type == engine.EventTextDelta {
+		switch ev.Event.Type {
+		case engine.EventTextDelta:
 			fmt.Print(ev.Event.Text)
+		case engine.EventToolExecutionStarted:
+			argsStr := string(ev.Event.ToolInput)
+			if len(argsStr) > 200 {
+				argsStr = argsStr[:200] + "..."
+			}
+			// ANSI colors: 90 is dark gray (dim), 33 is yellow
+			fmt.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
+		case engine.EventToolExecutionCompleted:
+			if ev.Event.ToolResult != nil && ev.Event.ToolResult.IsError {
+				// 31 is red
+				fmt.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
+			} else {
+				// 32 is green
+				fmt.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
+			}
 		}
 	}
 	fmt.Println()
