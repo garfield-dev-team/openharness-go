@@ -53,6 +53,7 @@ type ApiMessageRequest struct {
 type ApiStreamEvent struct {
 	TextDelta       *ApiTextDeltaEvent
 	MessageComplete *ApiMessageCompleteEvent
+	Err             error
 }
 
 // ApiTextDeltaEvent carries incremental text produced by the model.
@@ -148,9 +149,7 @@ func (c *AnthropicApiClient) StreamMessage(ctx context.Context, req *ApiMessageR
 
 func sendError(ch chan<- ApiStreamEvent, err error) {
 	ch <- ApiStreamEvent{
-		MessageComplete: &ApiMessageCompleteEvent{
-			StopReason: "error:" + err.Error(),
-		},
+		Err: err,
 	}
 }
 

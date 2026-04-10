@@ -22,6 +22,7 @@ import (
 type EventType string
 
 const (
+	EventModelTurnStarted       EventType = "model_turn_started"
 	EventTextDelta              EventType = "text_delta"
 	EventAssistantTurnComplete  EventType = "assistant_turn_complete"
 	EventToolExecutionStarted   EventType = "tool_execution_started"
@@ -163,6 +164,8 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 				Tools:        qctx.ToolRegistry.ToAPISchema(),
 				MaxTokens:    qctx.MaxTokens,
 			}
+
+			ch <- StreamEventWithUsage{Event: StreamEvent{Type: EventModelTurnStarted}}
 
 			streamCh, err := qctx.APIClient.StreamMessage(ctx, params)
 			if err != nil {

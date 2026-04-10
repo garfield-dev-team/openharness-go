@@ -162,14 +162,29 @@ func (r *RuntimeBundle) Close() error {
 // HandleLine processes a single user input line through the engine.
 func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 	ch := r.Engine.SubmitMessage(ctx, line)
+	
+	isThinking := false
+	clearThinking := func() {
+		if isThinking {
+			fmt.Print("\033[2K\r") // Clear the entire line and return to start
+			isThinking = false
+		}
+	}
+
 	for ev := range ch {
 		if ev.Event.Error != nil {
+			clearThinking()
 			return ev.Event.Error
 		}
 		switch ev.Event.Type {
+		case engine.EventModelTurnStarted:
+			fmt.Print("\033[90m⏳ Thinking...\033[0m")
+			isThinking = true
 		case engine.EventTextDelta:
+			clearThinking()
 			fmt.Print(ev.Event.Text)
 		case engine.EventToolExecutionStarted:
+			clearThinking()
 			argsStr := string(ev.Event.ToolInput)
 			if len(argsStr) > 200 {
 				argsStr = argsStr[:200] + "..."
@@ -177,6 +192,7 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 			// ANSI colors: 90 is dark gray (dim), 33 is yellow
 			fmt.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
 		case engine.EventToolExecutionCompleted:
+			clearThinking()
 			if ev.Event.ToolResult != nil && ev.Event.ToolResult.IsError {
 				// 31 is red
 				fmt.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
@@ -185,6 +201,7 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 				fmt.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
 			}
 		case engine.EventAssistantTurnComplete:
+			clearThinking()
 			// Optionally print a newline or separator
 		}
 	}

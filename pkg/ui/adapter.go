@@ -34,6 +34,10 @@ func (a *apiClientAdapter) StreamMessage(ctx context.Context, params engine.LLMR
 	go func() {
 		defer close(outCh)
 		for ev := range apiCh {
+			if ev.Err != nil {
+				outCh <- engine.LLMStreamEvent{Err: ev.Err}
+				continue
+			}
 			if ev.TextDelta != nil {
 				outCh <- engine.LLMStreamEvent{TextDelta: ev.TextDelta.Text}
 			}
