@@ -61,8 +61,9 @@ func NewToolResultBlock(toolUseID, content string, isError bool) ContentBlock {
 
 // ConversationMessage represents a single assistant or user message.
 type ConversationMessage struct {
-	Role    string         `json:"role"` // "user" or "assistant"
-	Content []ContentBlock `json:"content"`
+	Role             string         `json:"role"`
+	Content          []ContentBlock `json:"content"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
 }
 
 // FromUserText constructs a user message from raw text.

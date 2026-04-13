@@ -17,6 +17,7 @@ import (
 	"github.com/openharness/openharness/pkg/services"
 	"github.com/openharness/openharness/pkg/skills"
 	"github.com/openharness/openharness/pkg/state"
+	"github.com/openharness/openharness/pkg/tasks"
 	"github.com/openharness/openharness/pkg/tools"
 	"github.com/openharness/openharness/pkg/tools/builtin"
 )
@@ -109,6 +110,28 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 	}
 
 	adapter := &apiClientAdapter{client: apiClient, model: settings.Model}
+
+	taskRegistry := tasks.NewTaskRegistry()
+	subAgentExecutor := &tasks.SubAgentExecutor{
+		Registry:     taskRegistry,
+		ToolRegistry: toolReg,
+		APIClient:    adapter,
+		Model:        settings.Model,
+		MaxTokens:    settings.MaxTokens,
+		Cwd:          cwd,
+	}
+
+	_ = toolReg.Register(builtin.NewAgentTool(subAgentExecutor))
+	_ = toolReg.Register(builtin.NewTaskCreateTool(subAgentExecutor))
+	_ = toolReg.Register(builtin.NewTaskGetTool(taskRegistry))
+	_ = toolReg.Register(builtin.NewTaskListTool(taskRegistry))
+	_ = toolReg.Register(builtin.NewTaskStopTool(taskRegistry))
+	_ = toolReg.Register(builtin.NewTaskOutputTool(taskRegistry))
+	_ = toolReg.Register(builtin.NewTaskSendMessageTool(taskRegistry))
+	_ = toolReg.Register(builtin.NewTaskUpdateTool(taskRegistry))
+	_ = toolReg.Register(builtin.NewTaskPacketCreateTool())
+	_ = toolReg.Register(builtin.NewTaskPacketValidateTool())
+
 	qe := engine.NewQueryEngine(
 		adapter,
 		toolReg,

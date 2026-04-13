@@ -88,11 +88,12 @@ func (c *OpenAIApiClient) StreamMessage(ctx context.Context, req *ApiMessageRequ
 // ---------------------------------------------------------------------------
 
 type openaiMessage struct {
-	Role       string           `json:"role"`
-	Content    string           `json:"content,omitempty"`
-	ToolCalls  []openaiToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	Name       string           `json:"name,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	ToolCalls        []openaiToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	Name             string           `json:"name,omitempty"`
 }
 
 type openaiToolCall struct {
@@ -197,8 +198,9 @@ func (c *OpenAIApiClient) buildRequestBody(req *ApiMessageRequest) ([]byte, erro
 				}
 			}
 			msg := openaiMessage{
-				Role:    "assistant",
-				Content: strings.TrimSuffix(contentBuilder.String(), "\n"),
+				Role:             "assistant",
+				Content:          strings.TrimSuffix(contentBuilder.String(), "\n"),
+				ReasoningContent: m.ReasoningContent,
 			}
 			if len(toolCalls) > 0 {
 				msg.ToolCalls = toolCalls
@@ -243,8 +245,9 @@ func (c *OpenAIApiClient) buildRequestBody(req *ApiMessageRequest) ([]byte, erro
 type openaiStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string           `json:"content"`
-			ToolCalls []openaiToolCall `json:"tool_calls"`
+			Content          string           `json:"content"`
+			ReasoningContent string           `json:"reasoning_content"`
+			ToolCalls        []openaiToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -290,7 +293,7 @@ func (c *OpenAIApiClient) streamOnce(
 
 	scanner := bufio.NewScanner(resp.Body)
 	var fullTextBuilder strings.Builder
-	// Tool calls are accumulated incrementally. Map of index to tool call data.
+	var reasoningBuilder strings.Builder
 	toolCallBuilders := make(map[int]*openaiToolCallBuilder)
 	var stopReason string
 	var usage types.UsageSnapshot
@@ -320,6 +323,10 @@ func (c *OpenAIApiClient) streamOnce(
 			choice := chunk.Choices[0]
 			if choice.FinishReason != "" && choice.FinishReason != "null" {
 				stopReason = choice.FinishReason
+			}
+
+			if choice.Delta.ReasoningContent != "" {
+				reasoningBuilder.WriteString(choice.Delta.ReasoningContent)
 			}
 
 			if choice.Delta.Content != "" {
@@ -355,6 +362,9 @@ func (c *OpenAIApiClient) streamOnce(
 	}
 
 	finalMsg := types.ConversationMessage{Role: "assistant"}
+	if reasoningBuilder.Len() > 0 {
+		finalMsg.ReasoningContent = reasoningBuilder.String()
+	}
 	if fullTextBuilder.Len() > 0 {
 		finalMsg.Content = append(finalMsg.Content, types.NewTextBlock(fullTextBuilder.String()))
 	}
