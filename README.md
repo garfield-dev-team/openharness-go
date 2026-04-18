@@ -24,6 +24,31 @@ go build -o openharness ./cmd/openharness/main.go
 ./openharness --prompt "帮我列出当前目录的文件"
 ```
 
+## 配置文件
+
+创建配置文件如下：
+
+```json
+// ~/.openharness/config.json
+{
+  "provider": "openai-compatable",
+  "base_url": "https://api.openai.com/v1",
+  "api_key": "sk-xxxx",
+  "model": "gpt-5.4"
+}
+```
+
+## 模型接入
+
+如何接入免费模型：
+
+- [OpenRouter.ai](https://openrouter.ai/models) 提供的免费模型接入
+- [NVIDIA AI](https://build.nvidia.com/models) 提供的免费模型接入
+
+## Skills
+
+内置 Skills 介绍
+
 ## 架构与组件
 
 - `cmd/openharness`: 命令行入口。
@@ -40,22 +65,29 @@ go build -o openharness ./cmd/openharness/main.go
 根据当前代码库的扫描和分析，项目在安全性、功能完备性和健壮性上存在部分未实现的模块和潜在风险。以下是后续版本的核心迭代规划：
 
 ### 1. 核心逻辑的潜在风险与破坏性行为修复（高优先级）
-* **修复工具调用的数据竞态 (Race Condition)**: 
-  * 当前 `pkg/engine/query.go` 中，引擎对于 LLM 返回的多个 ToolUses 采用了 `go func()` 简单并发执行。这极易导致文件读写冲突。计划改为串行执行或引入文件级读写锁。
-* **修复目录穿越漏洞 (Directory Traversal)**: 
-  * `pkg/tools/builtin/file_write.go` 和 `file_edit.go` 仅使用简单的路径拼接。需要增加严格的目录沙箱校验（如 `filepath.Clean` 和 `strings.HasPrefix`），防止 LLM 越权读取或覆盖工作区外的敏感文件。
-* **收紧危险命令执行的权限**: 
-  * 当前 `pkg/tools/builtin/bash.go` 没有任何沙箱约束。结合 `AllowAllPermissions` 的 Dummy 实现，Agent 存在极大的 RCE（远程命令执行）风险。计划实现完整的 `PermissionChecker`，并对高危命令提供二次确认机制或运行环境沙箱化。
+
+- **修复工具调用的数据竞态 (Race Condition)**:
+  - 当前 `pkg/engine/query.go` 中，引擎对于 LLM 返回的多个 ToolUses 采用了 `go func()` 简单并发执行。这极易导致文件读写冲突。计划改为串行执行或引入文件级读写锁。
+- **修复目录穿越漏洞 (Directory Traversal)**:
+  - `pkg/tools/builtin/file_write.go` 和 `file_edit.go` 仅使用简单的路径拼接。需要增加严格的目录沙箱校验（如 `filepath.Clean` 和 `strings.HasPrefix`），防止 LLM 越权读取或覆盖工作区外的敏感文件。
+- **收紧危险命令执行的权限**:
+  - 当前 `pkg/tools/builtin/bash.go` 没有任何沙箱约束。结合 `AllowAllPermissions` 的 Dummy 实现，Agent 存在极大的 RCE（远程命令执行）风险。计划实现完整的 `PermissionChecker`，并对高危命令提供二次确认机制或运行环境沙箱化。
 
 ### 2. 未实现的模块与降级逻辑补全（中优先级）
-* **完善 MCP 协议实现**:
-  * 当前 `mcp/client.go` 的 JSON-RPC 读取仅假设了请求/响应是严格串行的（`sequential request/response`）。计划引入通过 ID 进行多路复用（Demultiplexing）的机制，以支持乱序返回和异步通知。
-  * 实现除 `stdio` 之外的其他传输协议（当前标记为 `transport not yet implemented`）。
-* **升级记忆检索系统**:
-  * 当前 `memory/manager.go` 中的 `FindRelevantMemories` 仅实现了基础的字符串子串匹配（Fallback 实现）。计划接入真实的向量嵌入（Embeddings）模型以支持语义检索。
-* **完善 Hook 默认配置逻辑**:
-  * 补全 `pkg/hooks/loader.go` 中 `applyDefaults` 的占位逻辑，使其对齐更复杂的默认行为设定。
+
+- **完善 MCP 协议实现**:
+  - 当前 `mcp/client.go` 的 JSON-RPC 读取仅假设了请求/响应是严格串行的（`sequential request/response`）。计划引入通过 ID 进行多路复用（Demultiplexing）的机制，以支持乱序返回和异步通知。
+  - 实现除 `stdio` 之外的其他传输协议（当前标记为 `transport not yet implemented`）。
+- **升级记忆检索系统**:
+  - 当前 `memory/manager.go` 中的 `FindRelevantMemories` 仅实现了基础的字符串子串匹配（Fallback 实现）。计划接入真实的向量嵌入（Embeddings）模型以支持语义检索。
+- **完善 Hook 默认配置逻辑**:
+  - 补全 `pkg/hooks/loader.go` 中 `applyDefaults` 的占位逻辑，使其对齐更复杂的默认行为设定。
 
 ### 3. 代码质量与健壮性提升（低优先级）
-* **清理无用代码**: 移除静态检查发现的冗余代码（如 `pkg/engine/query.go` 中的 `nowMillis()` 函数）。
-* **增强错误处理**: 补全 `mcp/client.go` 中忽略的底层错误（如写入 `notifications/initialized` 时未处理断开异常）。
+
+- **清理无用代码**: 移除静态检查发现的冗余代码（如 `pkg/engine/query.go` 中的 `nowMillis()` 函数）。
+- **增强错误处理**: 补全 `mcp/client.go` 中忽略的底层错误（如写入 `notifications/initialized` 时未处理断开异常）。
+
+* 增加日志模块，记录Tools、Skills调用详情
+* 完善记忆系统的实现（分层记忆，项目级别、用户偏好等）
+* Agent Team/Coordinator Mode 的实现
