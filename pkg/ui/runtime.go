@@ -57,13 +57,20 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 
 	toolReg := builtin.CreateDefaultToolRegistry()
 
+	// Load global plugins and skills
 	// Load skills from ~/.openharness/skills and ./skills
 	var loadedSkills []skills.Skill
 	if home, err := os.UserHomeDir(); err == nil {
+		globalPlugins, _ := skills.LoadPlugins(fmt.Sprintf("%s/.openharness/plugins", home))
 		globalSkills, _ := skills.LoadSkills(fmt.Sprintf("%s/.openharness/skills", home))
+		loadedSkills = append(loadedSkills, globalPlugins...)
 		loadedSkills = append(loadedSkills, globalSkills...)
 	}
+
+	// Load local plugins and skills
+	localPlugins, _ := skills.LoadPlugins(fmt.Sprintf("%s/plugins", cwd))
 	localSkills, _ := skills.LoadSkills(fmt.Sprintf("%s/skills", cwd))
+	loadedSkills = append(loadedSkills, localPlugins...)
 	loadedSkills = append(loadedSkills, localSkills...)
 
 	if len(loadedSkills) > 0 {
@@ -104,10 +111,11 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 			claudeMDContent = string(data)
 		}
 	}
-	sysPrompt := prompts.BuildRuntimeSystemPrompt("", cwd, memoryPrompt, loadedSkills, claudeMDContent)
+	var customSysPrompt string
 	if settings.SystemPrompt != nil && *settings.SystemPrompt != "" {
-		sysPrompt = *settings.SystemPrompt
+		customSysPrompt = *settings.SystemPrompt
 	}
+	sysPrompt := prompts.BuildRuntimeSystemPrompt(customSysPrompt, cwd, memoryPrompt, loadedSkills, toolReg.ToAPISchema(), claudeMDContent)
 
 	adapter := &apiClientAdapter{client: apiClient, model: settings.Model}
 

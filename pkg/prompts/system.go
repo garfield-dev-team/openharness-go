@@ -101,9 +101,9 @@ func DiscoverClaudeMD(cwd string) []string {
 }
 
 // BuildRuntimeSystemPrompt assembles the full runtime system prompt from all
-// constituent parts: user-level settings, cwd context, memory, skills, and
+// constituent parts: user-level settings, cwd context, memory, skills, tools and
 // CLAUDE.md content.
-func BuildRuntimeSystemPrompt(settings, cwd, memory string, loadedSkills []skills.Skill, claudemd string) string {
+func BuildRuntimeSystemPrompt(settings, cwd, memory string, loadedSkills []skills.Skill, tools []map[string]any, claudemd string) string {
 	var sb strings.Builder
 
 	envInfo := GetEnvironmentInfo(cwd)
@@ -121,11 +121,26 @@ func BuildRuntimeSystemPrompt(settings, cwd, memory string, loadedSkills []skill
 		sb.WriteString("\n")
 	}
 
+	if len(tools) > 0 {
+		sb.WriteString("\n# Available Tools\n")
+		sb.WriteString("You have access to the following tools:\n")
+		sb.WriteString("<available_tools>\n")
+		for _, t := range tools {
+			name, _ := t["name"].(string)
+			desc, _ := t["description"].(string)
+			sb.WriteString(fmt.Sprintf("<tool>\n  <name>%s</name>\n  <description>%s</description>\n</tool>\n", name, desc))
+		}
+		sb.WriteString("</available_tools>\n")
+	}
+
 	if len(loadedSkills) > 0 {
 		sb.WriteString("\n# Available Skills\n")
 		sb.WriteString("You have access to specialized skills. To invoke a skill, use the `Skill` tool with the exact name.\n")
 		sb.WriteString("<available_skills>\n")
 		for _, s := range loadedSkills {
+			if s.IsSubSkill {
+				continue // Hide sub-skills from the top-level index to save context window
+			}
 			sb.WriteString(fmt.Sprintf("<skill>\n  <name>%s</name>\n  <description>%s</description>\n</skill>\n", s.Name, s.Description))
 		}
 		sb.WriteString("</available_skills>\n")

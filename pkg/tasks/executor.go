@@ -92,7 +92,7 @@ func (e *SubAgentExecutor) runAgent(ctx context.Context, taskID string, cfg SubA
 
 	sysPrompt := cfg.SystemPrompt
 	if sysPrompt == "" {
-		sysPrompt = buildSubAgentSystemPrompt(cfg.Type, cfg.Prompt)
+		sysPrompt = buildSubAgentSystemPrompt(cfg.Type, cfg.Prompt, sandboxReg.ToAPISchema())
 	}
 
 	messages := []types.ConversationMessage{
@@ -175,7 +175,7 @@ func getToolWhitelist(t SubAgentType) []string {
 	}
 }
 
-func buildSubAgentSystemPrompt(agentType SubAgentType, objective string) string {
+func buildSubAgentSystemPrompt(agentType SubAgentType, objective string, tools []map[string]any) string {
 	role := "a general-purpose coding agent"
 	switch agentType {
 	case SubAgentExplore:
@@ -186,14 +186,21 @@ func buildSubAgentSystemPrompt(agentType SubAgentType, objective string) string 
 		role = "a verification agent. Run tests and validate code correctness"
 	}
 
-	return fmt.Sprintf(`You are %s working on the following objective:
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("You are %s working on the following objective:\n\n<objective>\n%s\n</objective>\n\n", role, objective))
+	
+	if len(tools) > 0 {
+		sb.WriteString("You have access to the following tools:\n<available_tools>\n")
+		for _, t := range tools {
+			name, _ := t["name"].(string)
+			desc, _ := t["description"].(string)
+			sb.WriteString(fmt.Sprintf("<tool>\n  <name>%s</name>\n  <description>%s</description>\n</tool>\n", name, desc))
+		}
+		sb.WriteString("</available_tools>\n\n")
+	}
 
-<objective>
-%s
-</objective>
-
-Complete the objective using the tools available to you. Be thorough and systematic.
-When you are done, provide a clear summary of what you accomplished.`, role, objective)
+	sb.WriteString("Complete the objective using the tools available to you. Be thorough and systematic.\nWhen you are done, provide a clear summary of what you accomplished.")
+	return sb.String()
 }
 
 func truncate(s string, maxLen int) string {

@@ -15,6 +15,7 @@ type Skill struct {
 	Name         string
 	Description  string
 	Instructions string
+	IsSubSkill   bool // If true, it won't be shown in the top-level <available_skills> index
 }
 
 // LoadSkills scans the given directory for SKILL.md files or *.md files
@@ -56,6 +57,70 @@ func LoadSkills(dir string) ([]Skill, error) {
 	}
 
 	return skills, nil
+}
+
+// LoadPlugins scans a plugins directory, where each plugin has a 'skills' subdirectory.
+// It creates a "virtual skill" for the plugin itself that lists its sub-skills,
+// and prefixes the sub-skill names with the plugin name (e.g. 'superpowers:writing-plans').
+func LoadPlugins(pluginsDir string) ([]Skill, error) {
+	var allSkills []Skill
+
+	entries, err := os.ReadDir(pluginsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return allSkills, nil
+		}
+		return nil, fmt.Errorf("plugins: read dir %s: %w", pluginsDir, err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		pluginName := entry.Name()
+		pluginSkillsDir := filepath.Join(pluginsDir, pluginName, "skills")
+
+		pluginSkills, err := LoadSkills(pluginSkillsDir)
+		if err != nil {
+			continue // skip unreadable plugins
+		}
+
+		if len(pluginSkills) == 0 {
+			continue
+		}
+
+		// Create a virtual skill for the plugin index
+		var pluginDescription strings.Builder
+		pluginDescription.WriteString(fmt.Sprintf("A plugin collection of %d skills. Call this skill to see the list of available sub-skills.", len(pluginSkills)))
+
+		var pluginInstructions strings.Builder
+		pluginInstructions.WriteString(fmt.Sprintf("The plugin '%s' contains the following skills:\n\n", pluginName))
+
+		for _, s := range pluginSkills {
+			// Prefix the skill name with the plugin name to avoid collisions
+			prefixedName := fmt.Sprintf("%s:%s", pluginName, s.Name)
+			
+			pluginInstructions.WriteString(fmt.Sprintf("- **%s**: %s\n", prefixedName, s.Description))
+			
+			s.Name = prefixedName
+			// For the individual sub-skills, we prepend a small header
+			// so the model knows it loaded a sub-skill
+			s.Instructions = fmt.Sprintf("[Sub-skill loaded from plugin '%s']\n\n%s", pluginName, s.Instructions)
+			s.IsSubSkill = true
+			
+			allSkills = append(allSkills, s)
+		}
+
+		allSkills = append(allSkills, Skill{
+			Name:         pluginName,
+			Description:  pluginDescription.String(),
+			Instructions: pluginInstructions.String(),
+			IsSubSkill:   false, // This is the top-level index, so it IS visible
+		})
+	}
+
+	return allSkills, nil
 }
 
 // ParseSkillFile parses a markdown file with YAML-like frontmatter.
