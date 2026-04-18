@@ -71,6 +71,35 @@ go build -o openharness ./cmd/openharness/main.go
 - [OpenRouter.ai](https://openrouter.ai/models) 提供的免费模型接入
 - [NVIDIA AI](https://build.nvidia.com/models) 提供的免费模型接入
 
+## 📚 内置插件与技能 (Plugins & Skills)
+
+本项目内置了高维度的插件系统，你可以将各种 `.md` 格式的技能定义放到 `plugins/<plugin-name>/skills/` 目录下。
+
+目前系统已内置以下高级插件集合：
+
+### 1. `anthropic` (Anthropic 官方优质插件)
+- `anthropic:code-review`: 并行代码审查，支持自动读取 PR 详情、提取变更。
+- `anthropic:code-simplifier`: 代码精简专家，重构复杂代码的专项技能。
+- `anthropic:mcp-builder`: MCP 服务生成器，教 Agent 如何快速编写一个标准的 MCP Server。
+- `anthropic:skill-creator`: 技能生成器，指导 Agent 如何为你编写新的 `SKILL.md`（元技能）。
+- `anthropic:frontend-design`: 前端设计辅助，包含 React/UI 最佳实践。
+- `anthropic:webapp-testing`: Web 应用测试专家。
+- `anthropic:pptx`: 幻灯片制作与排版技能。
+- `anthropic:ralph-loop`: 自动化测试与反馈循环机制脚本。
+
+### 2. `superpowers` (社区增强技能包)
+包含系统性 Debug、测试驱动开发、子智能体规划等数十个强大指令。
+- `superpowers:systematic-debugging`: 深度 Bug 分析与排查框架。
+- `superpowers:writing-plans`: 任务拆解与子智能体 (SubAgent) 计划编写。
+- `superpowers:test-driven-development`: TDD 开发模式指导。
+- *(以及更多社区沉淀技能...)*
+
+### 3. `karpathy` (大师级代码准则)
+- `karpathy:karpathy-guidelines`: Andrej Karpathy 总结的代码开发黄金准则（保持极简、手术刀式修改、明确的思考与验收条件）。
+
+**如何使用？**
+大模型在启动时只会看到插件包的索引名称。当大模型需要特定能力时，它会主动调用 `Skill` 工具进行**按需下钻加载**，彻底避免了初始上下文爆炸。
+
 ## 架构与组件
 
 - `cmd/openharness`: 命令行入口。
