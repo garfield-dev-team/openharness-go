@@ -1,92 +1,102 @@
 # OpenHarness Go
 
-OpenHarness-Go 是一个基于 Go 语言开发的 AI Agent Harness 项目。该项目实现了一个可以挂载多种工具、MCP (Model Context Protocol) 服务和执行钩子（Hooks）的智能体引擎。它允许 LLM 在受控（或半受控）的环境下进行多轮交互、规划和工具调用，适用于自动化开发、文件操作和系统管理。
+OpenHarness-Go 是一个基于 Go 语言开发的高性能、高可扩展的 AI Agent Harness 项目。该项目实现了一个强大的多轮智能体引擎，不仅原生支持挂载文件操作、Shell 执行等工具，还完美支持了 **MCP (Model Context Protocol)**、**Progressive Disclosure Skills (渐进式披露技能)** 以及 **Task 并行子智能体系统**。
 
-## 核心特性
+它旨在提供一个受控、安全且具有强大上下文管理能力的执行环境，适用于自动化代码开发、代码审查、系统管理以及复杂的并行任务编排。
 
-- **多轮会话引擎 (`engine`)**: 支持状态维护、Token 消费统计以及并发/顺序工具调用的核心执行循环。
-- **工具挂载与执行 (`tools`)**: 内置 `Bash`、`FileEdit`、`FileRead`、`FileWrite` 等基础能力。
-- **MCP 客户端集成 (`mcp`)**: 实现了对 JSON-RPC 2.0 协议（Stdio 传输层）的支持，允许连接外部 MCP 服务端进行能力扩展。
-- **记忆与检索 (`memory`)**: 提供基础的项目级别记忆文件读写与简单的文本匹配检索。
-- **事件与钩子 (`hooks`)**: 支持在工具执行前后或特定事件触发时，通过 HTTP、Command、Prompt 或 Agent 模式执行拦截和校验逻辑。
-- **交互界面 (`ui`)**: 提供 REPL 交互模式和单次查询的打印模式。
+## 🌟 核心特性
 
-## 快速开始
+- **多轮会话引擎 (`engine`)**: 支持状态维护、SSE 流式解析，并在终端提供 Hacker 风格的彩色日志输出（包含工具参数展示、`⏳ Thinking...` 状态符）。
+- **动态上下文压缩 (`compaction`)**: 内置基于 Claude Code 理念的 5 阶段上下文压缩管道（L1 结果截断、L2 Snip、L3 微压缩、L4 坍缩、L5 LLM 总结），确保即使进行数百轮工具调用也不会导致 Token 溢出，并提供实时的 `[🧠 Brain Capacity]` 监控。
+- **高维插件与技能系统 (`plugins & skills`)**: 独创的**分层索引（Hierarchical Lazy Loading）机制**。支持挂载成百上千个 Markdown 定义的 Agent 技能，在初始时仅暴露插件命名空间索引，由大模型按需下钻加载，彻底解决上下文爆炸和注意力稀释问题。
+- **并行任务与子智能体 (`tasks`)**: 从串行 Todo 模式升级为并行的 Task 架构。大模型可以通过 `TaskCreate` 工具派生多个运行在**工具白名单沙箱**（如 Explore 模式只读）中的子 Agent，实现复杂任务的并行处理和结果汇总。
+- **MCP 客户端集成 (`mcp`)**: 实现了对 JSON-RPC 2.0 协议（Stdio 传输层）的无缝支持，一键接入海量外部 MCP 服务端扩展能力。
+- **深度思考模型支持 (`reasoning`)**: 深度兼容 OpenAI API 规范，完美支持带有 `reasoning_content` (思维链) 的深度思考模型（如 DeepSeek-R1）。
+
+## 🏗️ 系统架构
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│                      TUI / REPL Layer                       │
+│  (ANSI Colors, 🧠 Brain Capacity, ⏳ Thinking, Tool Logs)     │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+┌──────────────────────────────▼──────────────────────────────┐
+│                    Agent Engine (RunQuery)                  │
+│                                                             │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌───────────────┐  │
+│  │ Context Compact │ │ OpenAI / Stream │ │ Task Registry │  │
+│  │  (L1~L5 Stages) │ │ (Reasoning Fix) │ │ (Sub-Agents)  │  │
+│  └─────────────────┘ └─────────────────┘ └───────────────┘  │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+┌──────────────────────────────▼──────────────────────────────┐
+│                       Tool Registry                         │
+│                                                             │
+│  ┌──────────────┐ ┌───────────────┐ ┌────────────────────┐  │
+│  │ Built-in I/O │ │ MCP Connectors│ │ Skills & Plugins   │  │
+│  │ (Bash, Read) │ │ (JSON-RPC 2.0)│ │ (Lazy Namespace)   │  │
+│  └──────────────┘ └───────────────┘ └────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## 🚀 快速开始
 
 ```bash
-# 构建项目
+# 1. 构建项目
 go build -o openharness ./cmd/openharness/main.go
 
-# 运行交互式 REPL
+# 2. 运行交互式 REPL
 ./openharness
 
-# 运行单次指令
-./openharness --prompt "帮我列出当前目录的文件"
+# 3. 运行单次指令
+./openharness --prompt "帮我列出当前目录的文件并用 karpathy-guidelines 技能进行审查"
 ```
 
-## 配置文件
+## ⚙️ 配置文件
 
-创建配置文件如下：
+在用户目录下创建配置文件：`~/.openharness/settings.json`
 
 ```json
-// ~/.openharness/config.json
 {
-  "provider": "openai-compatable",
-  "base_url": "https://api.openai.com/v1",
+  "provider": "openai-compatible",
+  "base_url": "https://openrouter.ai/api/v1",
   "api_key": "sk-xxxx",
-  "model": "gpt-5.4"
+  "model": "meta-llama/llama-3.3-70b-instruct:free"
 }
 ```
-
-## 模型接入
 
 如何接入免费模型：
 
 - [OpenRouter.ai](https://openrouter.ai/models) 提供的免费模型接入
 - [NVIDIA AI](https://build.nvidia.com/models) 提供的免费模型接入
 
-## Skills
-
-内置 Skills 介绍
-
 ## 架构与组件
 
 - `cmd/openharness`: 命令行入口。
-- `pkg/engine`: LLM 交互和工具分发的引擎核心。
+- `pkg/engine`: LLM 交互、上下文压缩、工具分发的引擎核心。
+- `pkg/tasks`: 并行任务注册表与子智能体（SubAgent）执行器。
+- `pkg/api`: SSE 流式解析器与 OpenAI/Anthropic 协议适配层。
+- `pkg/skills`: 渐进式披露技能的 Markdown 解析与动态加载器。
+- `pkg/tools`: 内置工具定义（文件读写、Task 管理等）。
 - `pkg/mcp`: MCP 协议的客户端实现。
-- `pkg/tools`: 各种基础工具（如文件操作、Bash 执行）的定义。
-- `pkg/hooks`: 钩子系统的注册和执行器。
-- `pkg/memory`: 记忆系统的本地文件存储。
 
 ---
 
-## ⚠️ 已知问题与后续迭代规划
+## ⚠️ 后续迭代规划
 
-根据当前代码库的扫描和分析，项目在安全性、功能完备性和健壮性上存在部分未实现的模块和潜在风险。以下是后续版本的核心迭代规划：
+本项目正处于高速迭代中，目前已修复了初版中存在的工具并发数据竞态、静默崩溃等重大 Bug。接下来的迭代重点：
 
-### 1. 核心逻辑的潜在风险与破坏性行为修复（高优先级）
+### 1. 安全性与权限沙箱 (高优先级)
+- **严格的目录穿越防护**: 增强 `FileWrite`/`FileEdit` 的路径沙箱（`filepath.Clean`），防止大模型越权操作。
+- **指令执行权限控制**: 为 `Bash` 工具引入基于规则的 `PermissionChecker`（如拦截 `rm -rf /` 等高危命令的二次确认机制）。
 
-- **修复工具调用的数据竞态 (Race Condition)**:
-  - 当前 `pkg/engine/query.go` 中，引擎对于 LLM 返回的多个 ToolUses 采用了 `go func()` 简单并发执行。这极易导致文件读写冲突。计划改为串行执行或引入文件级读写锁。
-- **修复目录穿越漏洞 (Directory Traversal)**:
-  - `pkg/tools/builtin/file_write.go` 和 `file_edit.go` 仅使用简单的路径拼接。需要增加严格的目录沙箱校验（如 `filepath.Clean` 和 `strings.HasPrefix`），防止 LLM 越权读取或覆盖工作区外的敏感文件。
-- **收紧危险命令执行的权限**:
-  - 当前 `pkg/tools/builtin/bash.go` 没有任何沙箱约束。结合 `AllowAllPermissions` 的 Dummy 实现，Agent 存在极大的 RCE（远程命令执行）风险。计划实现完整的 `PermissionChecker`，并对高危命令提供二次确认机制或运行环境沙箱化。
+### 2. 记忆检索与存储 (中优先级)
+- **向量化语义检索**: 将目前基础的字符串匹配 `memory` 升级为真正的向量嵌入（Embeddings）模型检索，支持长期的跨项目知识沉淀。
 
-### 2. 未实现的模块与降级逻辑补全（中优先级）
-
-- **完善 MCP 协议实现**:
-  - 当前 `mcp/client.go` 的 JSON-RPC 读取仅假设了请求/响应是严格串行的（`sequential request/response`）。计划引入通过 ID 进行多路复用（Demultiplexing）的机制，以支持乱序返回和异步通知。
-  - 实现除 `stdio` 之外的其他传输协议（当前标记为 `transport not yet implemented`）。
-- **升级记忆检索系统**:
-  - 当前 `memory/manager.go` 中的 `FindRelevantMemories` 仅实现了基础的字符串子串匹配（Fallback 实现）。计划接入真实的向量嵌入（Embeddings）模型以支持语义检索。
-- **完善 Hook 默认配置逻辑**:
-  - 补全 `pkg/hooks/loader.go` 中 `applyDefaults` 的占位逻辑，使其对齐更复杂的默认行为设定。
-
-### 3. 代码质量与健壮性提升（低优先级）
-
-- **清理无用代码**: 移除静态检查发现的冗余代码（如 `pkg/engine/query.go` 中的 `nowMillis()` 函数）。
-- **增强错误处理**: 补全 `mcp/client.go` 中忽略的底层错误（如写入 `notifications/initialized` 时未处理断开异常）。
+### 3. MCP 协议完善 (低优先级)
+- 实现除 `stdio` 之外的其他传输协议（如 SSE）。
+- 支持 JSON-RPC 2.0 的异步通知和 ID 多路复用。
 
 * 增加日志模块，记录Tools、Skills调用详情
 * 完善记忆系统的实现（分层记忆，项目级别、用户偏好等）
