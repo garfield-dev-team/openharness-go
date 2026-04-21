@@ -8,11 +8,22 @@ import (
 	"sync"
 )
 
+// AskUserFunc is the callback signature for asking the user a question.
+type AskUserFunc func(ctx context.Context, question string, options []string) (string, error)
+
+// AskPermissionFunc is the callback for requesting permission to execute a tool.
+type AskPermissionFunc func(ctx context.Context, toolName string, reason string) (bool, error)
+
 // ToolExecutionContext carries the working directory and arbitrary metadata
 // that a tool may need during execution.
 type ToolExecutionContext struct {
 	Cwd      string         `json:"cwd"`
 	Metadata map[string]any `json:"metadata,omitempty"`
+
+	// AskUser allows tools to ask the user questions and get responses.
+	AskUser AskUserFunc `json:"-"`
+	// AskPermission allows tools to ask the user for permission.
+	AskPermission AskPermissionFunc `json:"-"`
 }
 
 // NewToolExecutionContext creates a ToolExecutionContext with the given cwd.

@@ -59,6 +59,8 @@ type QueryEngine struct {
 	maxTokens         int
 	maxTurns          int
 	hookExecutor      HookExecutor
+	askUser           tools.AskUserFunc
+	askPermission     tools.AskPermissionFunc
 
 	Messages       []types.ConversationMessage
 	collapseBuffer []types.ConversationMessage
@@ -81,6 +83,16 @@ func WithHookExecutor(h HookExecutor) QueryEngineOption {
 // WithPermissionChecker sets the permission checker.
 func WithPermissionChecker(pc PermissionChecker) QueryEngineOption {
 	return func(qe *QueryEngine) { qe.permissionChecker = pc }
+}
+
+// WithAskUser sets the callback for asking the user questions.
+func WithAskUser(fn tools.AskUserFunc) QueryEngineOption {
+	return func(qe *QueryEngine) { qe.askUser = fn }
+}
+
+// WithAskPermission sets the callback for requesting user permission.
+func WithAskPermission(fn tools.AskPermissionFunc) QueryEngineOption {
+	return func(qe *QueryEngine) { qe.askPermission = fn }
 }
 
 // NewQueryEngine creates a QueryEngine with the given required dependencies.
@@ -169,6 +181,8 @@ func (qe *QueryEngine) SubmitMessage(ctx context.Context, prompt string) <-chan 
 		MaxTokens:         qe.maxTokens,
 		MaxTurns:          qe.maxTurns,
 		HookExecutor:      qe.hookExecutor,
+		AskUser:           qe.askUser,
+		AskPermission:     qe.askPermission,
 	}
 
 	rawCh := RunQuery(ctx, qctx, &msgs)

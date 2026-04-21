@@ -34,8 +34,27 @@ type RuntimeBundle struct {
 	Cwd          string
 }
 
+type RuntimeOption func(*runtimeConfig)
+
+type runtimeConfig struct {
+	askUser       tools.AskUserFunc
+	askPermission tools.AskPermissionFunc
+}
+
+func WithHITLCallbacks(askUser tools.AskUserFunc, askPermission tools.AskPermissionFunc) RuntimeOption {
+	return func(cfg *runtimeConfig) {
+		cfg.askUser = askUser
+		cfg.askPermission = askPermission
+	}
+}
+
 // BuildRuntime assembles a RuntimeBundle from settings and cwd.
-func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error) {
+func BuildRuntime(settings *config.Settings, cwd string, opts ...RuntimeOption) (*RuntimeBundle, error) {
+	var cfg runtimeConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	apiKey, err := settings.ResolveAPIKey()
 	if err != nil {
 		return nil, fmt.Errorf("runtime: %w", err)
@@ -140,6 +159,14 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 	_ = toolReg.Register(builtin.NewTaskPacketCreateTool())
 	_ = toolReg.Register(builtin.NewTaskPacketValidateTool())
 
+	var engineOpts []engine.QueryEngineOption
+	if cfg.askUser != nil {
+		engineOpts = append(engineOpts, engine.WithAskUser(cfg.askUser))
+	}
+	if cfg.askPermission != nil {
+		engineOpts = append(engineOpts, engine.WithAskPermission(cfg.askPermission))
+	}
+
 	qe := engine.NewQueryEngine(
 		adapter,
 		toolReg,
@@ -147,6 +174,7 @@ func BuildRuntime(settings *config.Settings, cwd string) (*RuntimeBundle, error)
 		settings.Model,
 		sysPrompt,
 		settings.MaxTokens,
+		engineOpts...,
 	)
 
 	sessionID := fmt.Sprintf("session_%d", time.Now().UnixMilli())

@@ -10,6 +10,8 @@ import (
 
 	"github.com/openharness/openharness/pkg/config"
 	"github.com/openharness/openharness/pkg/engine"
+	"github.com/openharness/openharness/pkg/hitl"
+	"github.com/openharness/openharness/pkg/protocol"
 	"github.com/openharness/openharness/pkg/services"
 )
 
@@ -124,7 +126,8 @@ func RunREPL(ctx context.Context, settings *config.Settings) error {
 		return fmt.Errorf("getwd: %w", err)
 	}
 
-	rt, err := BuildRuntime(settings, cwd)
+	cliAdapter := hitl.NewCLIAdapter(os.Stdin, os.Stdout)
+	rt, err := BuildRuntime(settings, cwd, WithHITLCallbacks(cliAdapter.AskUser, cliAdapter.AskPermission))
 	if err != nil {
 		return err
 	}
@@ -183,4 +186,52 @@ func printHelp() {
 	fmt.Println("  /cost    Show token usage")
 	fmt.Println("  /help    Show this help")
 	fmt.Println("  /exit    Exit the REPL")
+}
+
+// RunJSONLinesMode runs a full JSON-Lines protocol session for TUI/IDE/remote.
+func RunJSONLinesMode(ctx context.Context, settings *config.Settings) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+
+	jlAdapter := hitl.NewJSONLinesAdapter(os.Stdin, os.Stdout)
+	manager := hitl.NewManager(jlAdapter.EmitFn())
+	jlAdapter.SetManager(manager)
+
+	rt, err := BuildRuntime(settings, cwd, WithHITLCallbacks(manager.AskQuestion, manager.AskPermission))
+	if err != nil {
+		return err
+	}
+	defer rt.Close()
+
+	if err := rt.Start(ctx); err != nil {
+		return err
+	}
+
+	jlAdapter.EmitFn()(&protocol.BackendEvent{
+		Type: protocol.BEReady,
+		Text: fmt.Sprintf("openharness v0.1.0 | model: %s | cwd: %s", settings.Model, cwd),
+	})
+
+	go func() {
+		if err := jlAdapter.StartReadLoop(ctx); err != nil {
+			// handle read loop exit
+		}
+	}()
+
+	for {
+		select {
+		case req := <-jlAdapter.IncomingRequests():
+			if req.Type == protocol.FRSubmitLine {
+				go func(line string) {
+					_ = rt.HandleLine(ctx, line)
+				}(req.Line)
+			} else if req.Type == protocol.FRShutdown {
+				return nil
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }

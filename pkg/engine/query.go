@@ -130,6 +130,9 @@ type QueryContext struct {
 	MaxTokens         int
 	MaxTurns          int
 	HookExecutor      HookExecutor
+
+	AskUser       tools.AskUserFunc
+	AskPermission tools.AskPermissionFunc
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +306,8 @@ func executeToolCall(ctx context.Context, qctx *QueryContext, toolName, toolUseI
 	}
 
 	execCtx := tools.NewToolExecutionContext(qctx.Cwd)
+	execCtx.AskUser = qctx.AskUser
+	execCtx.AskPermission = qctx.AskPermission
 	result, err := tool.Execute(ctx, toolInput, execCtx)
 	if err != nil {
 		return fail(fmt.Sprintf("tool execution error: %v", err))

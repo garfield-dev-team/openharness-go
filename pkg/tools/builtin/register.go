@@ -13,6 +13,7 @@ func RegisterAll(reg *tools.ToolRegistry) {
 		NewFileEditTool(),
 		NewGlobTool(),
 		NewGrepTool(),
+		NewAskUserQuestionTool(),
 	}
 	for _, t := range builtins {
 		_ = reg.Register(t)
