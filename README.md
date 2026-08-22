@@ -1,4 +1,8 @@
-# OpenHarness Go
+<p align="center">
+  <img src="docs/assets/banner.jpg" alt="OpenHarness Go" width="100%" />
+</p>
+
+<h1 align="center">OpenHarness Go</h1>
 
 OpenHarness-Go 是一个基于 Go 语言开发的高性能、高可扩展的 AI Agent Harness 项目。该项目实现了一个强大的多轮智能体引擎，不仅原生支持挂载文件操作、Shell 执行等工具，还完美支持了 **MCP (Model Context Protocol)**、**Progressive Disclosure Skills (渐进式披露技能)** 以及 **Task 并行子智能体系统**。
 
