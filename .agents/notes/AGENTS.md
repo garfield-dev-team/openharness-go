@@ -1,5 +1,5 @@
 # AGENTS.md — Agent Notes
 
-Agent Note 是由 agent 撰写的 RFC：持久的提案与决策记录，保存论证、备选方案、后果与所需的验证。编写前遵循[文档标准](../../docs/AGENTS.md)与 [Agent Note 规则](README.md)。
+Agent Notes are effectively RFCs written by agents: durable proposals and decision records that preserve rationale, alternatives, consequences, and required verification. Follow the [documentation standard](../../docs/AGENTS.md) and [the Agent Note rules](README.md).
 
-**每个新 Agent Note 都必须触发取代检查（supersession check）。** 先在活跃目录树（`proposed/`、`implemented/`、`rejected/`）中搜索覆盖同一决策或机制的旧 Note；判定为完全取代的旧 Note 与新 Note 在同一个 PR 中交叉链接并归档处理，部分取代则保持双方活跃并互相链接。没有做取代检查的新 Note 不应被合入。
+**Every new Agent Note triggers a supersession check.** Search the active tree (`proposed/`, `implemented/`, `rejected/`) for older notes covering the same decision or mechanism, classify any full or partial supersession using [oh-archive-agent-notes](../skills/oh-archive-agent-notes/SKILL.md), and archive every qualifying implemented note in the same PR. Keep partial supersessions active and cross-linked. A new note without a supersession check must not merge.

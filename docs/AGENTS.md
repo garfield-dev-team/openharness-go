@@ -1,43 +1,43 @@
-# AGENTS.md — 文档标准
+# AGENTS.md — The documentation standard
 
-本文件定义本仓库的文档结构、层级（tier）划分与写作规则。Agent Note 的存放与格式规则见 [.agents/notes/README.md](../.agents/notes/README.md)，其目录级指令见 [../.agents/notes/AGENTS.md](../.agents/notes/AGENTS.md)。
+This file defines document structure, tier taxonomy, and writing rules for this repository. Agent Note storage and format rules live in [.agents/notes/README.md](../.agents/notes/README.md); directory-level instructions for notes live in [../.agents/notes/AGENTS.md](../.agents/notes/AGENTS.md).
 
-## 层级划分：每个事实只有一个家
+## Tiers: one home per fact
 
-每条事实归属于职责所在的那个层级；其他位置一律链接过去，不复述。
+Each fact belongs to the tier whose job it is; everywhere else, link there instead of restating.
 
-| Tier | 职责 | 不属于这里的内容 |
+| Tier | Job | Does NOT belong there |
 |---|---|---|
-| 根 `AGENTS.md` | 常设指令：agent 每次会话都需要在上下文中的规则，每条一至三行，链接到事实的家 | 故事、示例、场景化流程、任何与链接目标重复的复述 |
-| 子树 `AGENTS.md`（`docs/`、`.agents/notes/` 等） | 仅针对该子树的指令 | 根文件已覆盖的全仓库规则 |
-| [Agent Notes](../.agents/notes/README.md) | 活跃决策记录：为什么、放弃了什么、需要的验证；`implemented/` 中的 Note 用现在时描述已交付的现实 | 决策落地后的迁移计划、验收清单、spec 语气的 "should"；被否决的提案进 `rejected/` |
-| `docs/` 主题文档（如 `context_compaction_and_caching.md`） | 面向人的机制讲解与参考：教程按前置依赖排序走向结果，参考定义查询范围描述现状 | 决策论证（→ Agent Notes）、常设指令（→ 根 `AGENTS.md`） |
-| 包 README（`pkg/*/`） | 该包的契约：配置、语义、限制、扩展点 | JSDoc 复述、其他包的关注点 |
+| Root `AGENTS.md` | Standing orders: rules an agent needs in context every session, one to three lines each, linking to the fact's home | Stories, worked examples, situational procedures, anything restated from a linked home |
+| Subtree `AGENTS.md` (`docs/`, `.agents/notes/`, …) | Orders specific to that subtree | Repo-wide rules the root file already carries |
+| [Agent Notes](../.agents/notes/README.md) | Active decision records: the why, what-was-given-up, and required verification; implemented notes describe shipped reality in present tense | Migration plans, acceptance checklists, spec-speak ("should…") once shipped; rejected proposals go to `rejected/` |
+| Topic docs in `docs/` (e.g. `context_compaction_and_caching.md`) | Human-facing mechanism explanations and references: tutorials follow an ordered path to an outcome, references define a lookup scope describing current behavior | Decision rationale (→ Agent Notes), standing orders (→ root `AGENTS.md`) |
+| Package READMEs (`pkg/*/`) | That package's contract: configuration, semantics, limitations, extension points | Restating godoc, other packages' concerns |
 
-放置口诀：缺陷复盘 → docs 主题文档或 Agent Note 的 Problem 章节；论证 → Agent Notes；操作步骤 → 教程类主题文档；类型定义 → 声明它的包 README 或主题文档；常设指令 → 根 `AGENTS.md` 并附论证链接。
+Placement rule of thumb: defect postmortems → topic docs or an Agent Note's Problem section; rationale → Agent Notes; step-by-step procedures → tutorial-style topic docs; type definitions → the declaring package's README or owning topic doc; standing orders → root `AGENTS.md` with a rationale link.
 
-## 写作规则
+## Writing rules
 
-- **描述当前状态，不叙述变更历史。** 持久性文字中避免"以前/现在/不再"、PR 号、commit 与代码位置叙事；直接命名现存的机制。变更故事放 commit、PR 描述或 Agent Note。
-- **每个非平凡变更在同一 PR 中至少包含一个 Agent Note**——更新已有的归属 Note 或新增一个；纯机械性局部编辑豁免（范围定义见 [Agent Note 规则](../.agents/notes/README.md#编写时机)）。
-- **一个物理行承载一个段落**，依赖编辑器软换行。代码块、表格与列表结构保持自身格式。
-- **注释与文档陈述完整契约，不陈述推理过程。** 保留行为、失败方式、时序、所有权与后果；删除推导路径、测试走查与显而易见的分支证明。
-- **直接书写**：点名具体组件、检查、API 与行为，不用隐喻性的"门面""词汇表"等模糊指代。
-- **成对更新**：改变某个已文档化类型的同一变更中，其归属页面同步更新。
+- **Document current state, not change history.** Durable prose avoids "previously / now / no longer", PR numbers, commits, and code-position narration; name the live mechanism. Change stories go in commits, PR descriptions, or Agent Notes.
+- **Every non-trivial change includes at least one Agent Note in the same PR** — update the owning note or add one; purely mechanical local edits are exempt ([scope](../.agents/notes/README.md#when-to-write-one)).
+- **One physical line per paragraph**; rely on editor soft-wrap. Code blocks, tables, and list structure keep their own formatting.
+- **Comments and docs state complete contracts, not reasoning transcripts.** Keep behavior, failure modes, timing, ownership, and consequences; delete derivation paths, test walkthroughs, and proofs of obvious branches.
+- **Write concretely**: name specific components, checks, APIs, and behaviors instead of metaphorical "gates" or "surfaces".
+- **Pairs update together**: the same change that reshapes a documented type updates its owning page.
 
-## Slop 自检清单
+## Slop checklist
 
-写完任何文档后排查：
+After writing any doc, hunt:
 
-- 同一条规则出现在多个家。用一个独特短语 grep 全仓库；保留一个家，其余改为链接。
-- 历史叙事："以前""曾经""已迁移"、PR 号、commit。改述为现时事实，必要时链接 Agent Note。
-- 实施状态注解（"已实现！""future: …"）。状态会腐烂；由仓库布局与代码本身承载。
-- 手工复述的目录、JSDoc、测试/包清单——当源码是权威来源时。
-- 推理记录：逐步实现叙事、对显然分支的证明。保留结论契约，删掉推导过程。
-- 段落墙：一段塞进多条规则和括号插入语。拆开，或把细节降级到它的家。
-- 强调通胀：到处加粗意味着没有重点。强调只留给真正改变行为的那个从句。
-- `implemented/` Agent Note 中的 spec 语气："should"、迁移计划、验收清单。implemented 描述的是"是什么"。
+- The same rule stated in more than one home. Grep a distinctive phrase; keep one home and link the rest.
+- Narrated history: "previously", "used to", "was moved", PR numbers, commits. State the current fact; link an Agent Note when needed.
+- Implementation-status annotations ("implemented!", "future: …"). Status rots; repo layout and code carry it.
+- Hand-restated catalogs, test/package inventories — wherever source is authoritative.
+- Reasoning transcripts: step-by-step implementation narration, proofs of obvious branches. Keep the resulting contract; cut the derivation.
+- Paragraph walls: one paragraph carrying several rules and parenthetical asides. Split it or demote detail to its home.
+- Emphasis inflation: bold everywhere means nothing stands out. Reserve emphasis for the clause that changes behavior.
+- Spec-speak in `implemented/` notes: "should", migration plans, acceptance checklists. Implemented describes what is.
 
-## 交叉引用必须用可机械校验的相对链接
+## Cross-reference with machine-checkable relative links
 
-仓库内引用一律使用相对 Markdown 路径，不用裸文件名或 Note 编号。链接目标不存在即为缺陷；移动被引用文件时，同一次变更修复所有入站链接。
+Repository references always use relative Markdown paths, never bare filenames or note numbers. A missing link target is a defect; when moving a referenced file, repair every inbound link in the same change.
