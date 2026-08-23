@@ -15,6 +15,7 @@ import (
 	"github.com/openharness/openharness/pkg/memory"
 	"github.com/openharness/openharness/pkg/prompts"
 	"github.com/openharness/openharness/pkg/services"
+	"github.com/openharness/openharness/pkg/session"
 	"github.com/openharness/openharness/pkg/skills"
 	"github.com/openharness/openharness/pkg/state"
 	"github.com/openharness/openharness/pkg/tasks"
@@ -30,6 +31,7 @@ type RuntimeBundle struct {
 	AppState     *state.AppStateStore
 	HookExecutor *hooks.HookExecutor
 	Engine       *engine.QueryEngine
+	Store        *session.Store
 	SessionID    string
 	Cwd          string
 }
@@ -39,6 +41,8 @@ type RuntimeOption func(*runtimeConfig)
 type runtimeConfig struct {
 	askUser       tools.AskUserFunc
 	askPermission tools.AskPermissionFunc
+	resumeID      string
+	continueLast  bool
 }
 
 func WithHITLCallbacks(askUser tools.AskUserFunc, askPermission tools.AskPermissionFunc) RuntimeOption {
@@ -46,6 +50,17 @@ func WithHITLCallbacks(askUser tools.AskUserFunc, askPermission tools.AskPermiss
 		cfg.askUser = askUser
 		cfg.askPermission = askPermission
 	}
+}
+
+// WithResumeSession opens the stored session tree for the given ID and seeds
+// the conversation from its active branch.
+func WithResumeSession(id string) RuntimeOption {
+	return func(cfg *runtimeConfig) { cfg.resumeID = id }
+}
+
+// WithContinueLastSession resumes the most recently modified session.
+func WithContinueLastSession() RuntimeOption {
+	return func(cfg *runtimeConfig) { cfg.continueLast = true }
 }
 
 // BuildRuntime assembles a RuntimeBundle from settings and cwd.
@@ -167,6 +182,31 @@ func BuildRuntime(settings *config.Settings, cwd string, opts ...RuntimeOption) 
 		engineOpts = append(engineOpts, engine.WithAskPermission(cfg.askPermission))
 	}
 
+	// Resolve the durable session tree: resume an existing file, continue
+	// the most recent one, or start a fresh session under .openharness/sessions.
+	sessionID := fmt.Sprintf("session_%d", time.Now().UnixMilli())
+	var sess *session.Store
+	switch {
+	case cfg.resumeID != "":
+		if !session.Exists(cwd, cfg.resumeID) {
+			return nil, fmt.Errorf("runtime: session %q not found", cfg.resumeID)
+		}
+		sessionID = cfg.resumeID
+	case cfg.continueLast:
+		ids, err := session.ListIDs(cwd)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) > 0 {
+			sessionID = ids[0]
+		}
+	}
+	sess, err = session.Open(session.FilePath(cwd, sessionID))
+	if err != nil {
+		return nil, err
+	}
+	engineOpts = append(engineOpts, engine.WithSessionStore(sess))
+
 	qe := engine.NewQueryEngine(
 		adapter,
 		toolReg,
@@ -176,8 +216,9 @@ func BuildRuntime(settings *config.Settings, cwd string, opts ...RuntimeOption) 
 		settings.MaxTokens,
 		engineOpts...,
 	)
-
-	sessionID := fmt.Sprintf("session_%d", time.Now().UnixMilli())
+	if sess.Len() > 0 {
+		qe.LoadMessages(sess.ActiveMessages())
+	}
 
 	return &RuntimeBundle{
 		APIClient:    apiClient,
@@ -186,6 +227,7 @@ func BuildRuntime(settings *config.Settings, cwd string, opts ...RuntimeOption) 
 		AppState:     appState,
 		HookExecutor: hookExec,
 		Engine:       qe,
+		Store:        sess,
 		SessionID:    sessionID,
 		Cwd:          cwd,
 	}, nil
@@ -215,7 +257,7 @@ func (r *RuntimeBundle) Start(ctx context.Context) error {
 // Close shuts down MCP connections and releases resources.
 func (r *RuntimeBundle) Close() error {
 	r.MCPManager.Close()
-	return nil
+	return r.Store.Close()
 }
 
 // HandleLine processes a single user input line through the engine.
@@ -239,6 +281,9 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 		case engine.EventModelTurnStarted:
 			fmt.Print("\033[90m⏳ Thinking...\033[0m")
 			isThinking = true
+		case engine.EventAborted:
+			clearThinking()
+			fmt.Println("\n\033[33m⏹ Aborted (session preserved)\033[0m")
 		case engine.EventTextDelta:
 			clearThinking()
 			fmt.Print(ev.Event.Text)

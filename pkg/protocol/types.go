@@ -29,6 +29,11 @@ const (
 	BEError             BackendEventType = "error"
 	BEShutdown          BackendEventType = "shutdown"
 
+	// Submission lifecycle receipts: a queued message was accepted, or was
+	// merged into the conversation at a delivery point.
+	BEQueued    BackendEventType = "queued"
+	BEDelivered BackendEventType = "delivered"
+
 	// HITL events – require a frontend response to unblock the engine.
 	BEModalRequest  BackendEventType = "modal_request"
 	BESelectRequest BackendEventType = "select_request"
@@ -78,6 +83,7 @@ type FrontendRequestType string
 
 const (
 	FRSubmitLine         FrontendRequestType = "submit_line"
+	FRQueueMessage       FrontendRequestType = "queue_message" // kind: "steering" | "follow_up"
 	FRQuestionResponse   FrontendRequestType = "question_response"
 	FRPermissionResponse FrontendRequestType = "permission_response"
 	FRListSessions       FrontendRequestType = "list_sessions"
@@ -88,6 +94,7 @@ type FrontendRequest struct {
 	Type      FrontendRequestType `json:"type"`
 	RequestID string              `json:"request_id,omitempty"`
 	Line      string              `json:"line,omitempty"`
+	Kind      string              `json:"kind,omitempty"` // queue_message delivery kind
 	Answer    string              `json:"answer,omitempty"`
 	Allowed   *bool               `json:"allowed,omitempty"`
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 
 	"github.com/openharness/openharness/pkg/config"
 	"github.com/openharness/openharness/pkg/ui"
@@ -52,27 +51,32 @@ func newRootCmd() *cobra.Command {
 				flagSystemPrompt, flagPermissionMode, flagOutputFormat,
 				flagVerbose, flagFast, flagEffort, flagPasses)
 
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-			defer stop()
+			// Signal policy: the REPL installs its own two-stage Ctrl-C
+			// handler (first press aborts the query, second exits); other
+			// modes rely on the default SIGINT behavior.
+			ctx := context.Background()
+
+			var rtOpts []ui.RuntimeOption
+			switch {
+			case flagResume != "":
+				rtOpts = append(rtOpts, ui.WithResumeSession(flagResume))
+			case flagContinue:
+				rtOpts = append(rtOpts, ui.WithContinueLastSession())
+			}
 
 			// -p prompt: non-interactive single shot
 			if flagPrompt != "" {
-				return ui.RunPrintMode(ctx, &settings, flagPrompt, flagOutputFormat)
+				return ui.RunPrintMode(ctx, &settings, flagPrompt, flagOutputFormat, rtOpts...)
 			}
 
 			// --print: read stdin, print response
 			if flagPrint {
 				prompt := readStdin()
-				return ui.RunPrintMode(ctx, &settings, prompt, flagOutputFormat)
-			}
-
-			// --resume / --continue: placeholder
-			if flagResume != "" || flagContinue {
-				return fmt.Errorf("--resume and --continue are not yet implemented")
+				return ui.RunPrintMode(ctx, &settings, prompt, flagOutputFormat, rtOpts...)
 			}
 
 			// Default: interactive REPL
-			return ui.RunREPL(ctx, &settings)
+			return ui.RunREPL(ctx, &settings, rtOpts...)
 		},
 	}
 

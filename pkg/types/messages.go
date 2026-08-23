@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/openharness/openharness/pkg/types/internal/uid"
+	"github.com/openharness/openharness/pkg/internal/uid"
 )
 
 // ---------------------------------------------------------------------------
