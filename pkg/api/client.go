@@ -52,6 +52,7 @@ type ApiMessageRequest struct {
 // ApiStreamEvent is the union type for streaming events.
 type ApiStreamEvent struct {
 	TextDelta       *ApiTextDeltaEvent
+	ReasoningDelta  string
 	MessageComplete *ApiMessageCompleteEvent
 	Err             error
 }

@@ -16,3 +16,6 @@ output
 .augment/rules/byterover-rules.md
 .vscode/launch.json
 .trae/documents
+
+# OpenHarness runtime artifacts
+.openharness/

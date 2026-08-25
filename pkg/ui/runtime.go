@@ -271,6 +271,7 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 			isThinking = false
 		}
 	}
+	rendered := false
 
 	for ev := range ch {
 		if ev.Event.Error != nil {
@@ -286,9 +287,16 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 			fmt.Println("\n\033[33m⏹ Aborted (session preserved)\033[0m")
 		case engine.EventTextDelta:
 			clearThinking()
+			rendered = true
 			fmt.Print(ev.Event.Text)
+		case engine.EventReasoningDelta:
+			clearThinking()
+			rendered = true
+			// 90 is dark gray: keep reasoning visible but visually subordinate.
+			fmt.Print("\033[90m" + ev.Event.Text + "\033[0m")
 		case engine.EventToolExecutionStarted:
 			clearThinking()
+			rendered = true
 			argsStr := string(ev.Event.ToolInput)
 			if len(argsStr) > 200 {
 				argsStr = argsStr[:200] + "..."
@@ -310,6 +318,10 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 		}
 	}
 	fmt.Println()
+
+	if !rendered {
+		fmt.Println("\033[33m⚠ Model returned no visible content (reasoning-only or empty response).\033[0m")
+	}
 
 	currentTokens := r.Engine.CurrentTokens()
 	threshold := services.DefaultCompactionConfig().TokenThreshold

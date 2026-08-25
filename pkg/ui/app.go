@@ -263,6 +263,8 @@ func RunJSONLinesMode(ctx context.Context, settings *config.Settings, rtOpts ...
 					emit(&protocol.BackendEvent{Type: protocol.BEError, Text: "aborted"})
 				case engine.EventTextDelta:
 					emit(&protocol.BackendEvent{Type: protocol.BEAssistantDelta, Text: ev.Event.Text})
+				case engine.EventReasoningDelta:
+					emit(&protocol.BackendEvent{Type: protocol.BEReasoningDelta, Text: ev.Event.Text})
 				case engine.EventToolExecutionStarted:
 					emit(&protocol.BackendEvent{
 						Type:     protocol.BEToolStarted,

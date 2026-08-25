@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,10 @@ import (
 )
 
 const defaultOpenAIBaseURL = "https://api.openai.com/v1"
+
+// debugSSE dumps raw SSE lines to stderr when OPENHARNESS_DEBUG is set —
+// a diagnostic aid for providers that stream unrecognized payload shapes.
+var debugSSE = os.Getenv("OPENHARNESS_DEBUG") != ""
 
 // OpenAIApiClient is a wrapper around net/http that calls OpenAI-compatible
 // Chat Completions API with retry logic and SSE streaming.
@@ -247,6 +252,7 @@ type openaiStreamChunk struct {
 		Delta struct {
 			Content          string           `json:"content"`
 			ReasoningContent string           `json:"reasoning_content"`
+			Reasoning        string           `json:"reasoning"` // OpenRouter-style reasoning field
 			ToolCalls        []openaiToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
@@ -308,6 +314,13 @@ func (c *OpenAIApiClient) streamOnce(
 		if data == "[DONE]" {
 			break
 		}
+		if debugSSE {
+			sample := data
+			if len(sample) > 500 {
+				sample = sample[:500] + "..."
+			}
+			log.Printf("[openharness debug:sse] %s", sample)
+		}
 
 		var chunk openaiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -325,8 +338,11 @@ func (c *OpenAIApiClient) streamOnce(
 				stopReason = choice.FinishReason
 			}
 
-			if choice.Delta.ReasoningContent != "" {
-				reasoningBuilder.WriteString(choice.Delta.ReasoningContent)
+			// Providers disagree on the reasoning field: DeepSeek-style
+			// servers use reasoning_content, OpenRouter uses reasoning.
+			if reasoning := choice.Delta.ReasoningContent + choice.Delta.Reasoning; reasoning != "" {
+				reasoningBuilder.WriteString(reasoning)
+				events <- ApiStreamEvent{ReasoningDelta: reasoning}
 			}
 
 			if choice.Delta.Content != "" {

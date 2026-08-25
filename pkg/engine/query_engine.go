@@ -164,6 +164,7 @@ func NewQueryEngine(
 		systemPrompt:      systemPrompt,
 		maxTokens:         maxTokens,
 		maxTurns:          100,
+		baseCtx:           context.Background(),
 	}
 	for _, o := range opts {
 		o(qe)
@@ -197,7 +198,6 @@ func (qe *QueryEngine) Submit(kind SubmissionKind, prompt string) <-chan StreamE
 			start = true
 		}
 	}
-	qe.baseCtx = context.Background() // replaced by SubmitMessage callers via BindContext
 	qe.mu.Unlock()
 
 	if start {

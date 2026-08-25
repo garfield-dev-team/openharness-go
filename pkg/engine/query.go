@@ -24,6 +24,7 @@ type EventType string
 const (
 	EventModelTurnStarted       EventType = "model_turn_started"
 	EventTextDelta              EventType = "text_delta"
+	EventReasoningDelta         EventType = "reasoning_delta"
 	EventAssistantTurnComplete  EventType = "assistant_turn_complete"
 	EventToolExecutionStarted   EventType = "tool_execution_started"
 	EventToolExecutionCompleted EventType = "tool_execution_completed"
@@ -106,10 +107,11 @@ type HookExecutor interface {
 
 // LLMStreamEvent is a single token/event from the LLM streaming response.
 type LLMStreamEvent struct {
-	TextDelta string
-	Message   *types.ConversationMessage
-	Usage     *types.UsageSnapshot
-	Err       error
+	TextDelta      string
+	ReasoningDelta string
+	Message        *types.ConversationMessage
+	Usage          *types.UsageSnapshot
+	Err            error
 }
 
 // StreamingLLMClient abstracts the LLM API.
@@ -212,6 +214,11 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 				if ev.TextDelta != "" {
 					ch <- StreamEventWithUsage{
 						Event: StreamEvent{Type: EventTextDelta, Text: ev.TextDelta},
+					}
+				}
+				if ev.ReasoningDelta != "" {
+					ch <- StreamEventWithUsage{
+						Event: StreamEvent{Type: EventReasoningDelta, Text: ev.ReasoningDelta},
 					}
 				}
 				if ev.Message != nil {

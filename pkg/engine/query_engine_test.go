@@ -163,6 +163,22 @@ func newTestEngine(t *testing.T, client engine.StreamingLLMClient) *engine.Query
 		engine.WithMaxTurns(8))
 }
 
+// Submit called directly (JSONLines path) on a fresh engine must run even
+// though no SubmitMessage ever provided a context — nil baseCtx would panic.
+func TestSubmitDirectlyWithoutSubmitMessage(t *testing.T) {
+	client := &scriptedClient{}
+	client.push(scriptedTurn{text: "direct"})
+	qe := newTestEngine(t, client)
+
+	evs := drain(qe.Submit(engine.SubmissionNewTurn, "hello"))
+	if hasEvent(evs, engine.EventError) {
+		t.Fatalf("direct Submit errored: %+v", evs)
+	}
+	if client.callCount() != 1 {
+		t.Fatalf("expected one LLM call, got %d", client.callCount())
+	}
+}
+
 // Concurrent submissions must serialize: exactly one LLM call per submission,
 // each seeing strictly growing history in submission order.
 func TestConcurrentSubmitsSerializeSingleFlight(t *testing.T) {

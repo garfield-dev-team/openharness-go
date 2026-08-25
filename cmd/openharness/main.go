@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/openharness/openharness/pkg/config"
+	"github.com/openharness/openharness/pkg/onboard"
 	"github.com/openharness/openharness/pkg/ui"
 	"github.com/spf13/cobra"
 )
@@ -51,6 +52,19 @@ func newRootCmd() *cobra.Command {
 				flagSystemPrompt, flagPermissionMode, flagOutputFormat,
 				flagVerbose, flagFast, flagEffort, flagPasses)
 
+			// First-run onboarding: no key from flags, config file, or env.
+			// Interactive sessions get the setup wizard; non-interactive
+			// invocations fall through to the standard missing-key error.
+			if onboard.Needed(&settings) {
+				if !onboard.IsTerminal() {
+					_, keyErr := settings.ResolveAPIKey()
+					return keyErr
+				}
+				if err := onboard.Run(&settings, onboard.Options{Terminal: true}); err != nil {
+					return err
+				}
+				fmt.Println()
+			}
 			// Signal policy: the REPL installs its own two-stage Ctrl-C
 			// handler (first press aborts the query, second exits); other
 			// modes rely on the default SIGINT behavior.
@@ -263,23 +277,16 @@ func newAuthCmd() *cobra.Command {
 	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "login",
-		Short: "Configure API key",
+		Short: "Configure provider and API key (interactive setup wizard)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Print("Enter API key: ")
-			var key string
-			if _, err := fmt.Scanln(&key); err != nil {
-				return err
-			}
 			settings, err := config.LoadSettings()
 			if err != nil {
-				return err
+				return fmt.Errorf("load settings: %w", err)
 			}
-			settings.APIKey = key
-			if err := config.SaveSettings(settings); err != nil {
-				return err
+			if !onboard.IsTerminal() {
+				return fmt.Errorf("auth login requires an interactive terminal")
 			}
-			fmt.Println("API key saved.")
-			return nil
+			return onboard.Run(&settings, onboard.Options{Terminal: true})
 		},
 	})
 	cmd.AddCommand(&cobra.Command{

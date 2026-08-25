@@ -21,6 +21,7 @@ const (
 	BETasksSnapshot     BackendEventType = "tasks_snapshot"
 	BETranscriptItem    BackendEventType = "transcript_item"
 	BEAssistantDelta    BackendEventType = "assistant_delta"
+	BEReasoningDelta    BackendEventType = "reasoning_delta"
 	BEAssistantComplete BackendEventType = "assistant_complete"
 	BELineComplete      BackendEventType = "line_complete"
 	BEToolStarted       BackendEventType = "tool_started"

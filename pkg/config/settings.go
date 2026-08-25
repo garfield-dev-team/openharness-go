@@ -150,7 +150,7 @@ func (s Settings) ResolveAPIKey() (string, error) {
 	if envKey != "" {
 		return envKey, nil
 	}
-	return "", fmt.Errorf("no API key found; set ANTHROPIC_API_KEY or configure api_key in %s", GetConfigFilePath())
+	return "", fmt.Errorf("no API key found; run `openharness auth login` (interactive setup), set ANTHROPIC_API_KEY, or configure api_key in %s", GetConfigFilePath())
 }
 
 // ---------------------------------------------------------------------------
