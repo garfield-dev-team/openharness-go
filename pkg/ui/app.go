@@ -1,15 +1,13 @@
 package ui
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/signal"
-	"strconv"
 	"strings"
-	"sync/atomic"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/openharness/openharness/pkg/config"
 	"github.com/openharness/openharness/pkg/engine"
@@ -131,161 +129,46 @@ func printStreamJSON(ch <-chan engine.StreamEventWithUsage) error {
 	return nil
 }
 
-// RunREPL starts an interactive read-eval-print loop.
+// RunREPL starts the interactive Bubble Tea TUI: status header, scrolling
+// transcript, slash-autocomplete input, and a model picker.
 //
-// Signal handling is two-stage: the first Ctrl-C aborts the running query
-// (the session survives); a Ctrl-C while idle exits the REPL.
+// Ctrl-C is two-stage: while a query runs it aborts the query (the session
+// survives); while idle it exits.
 func RunREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOption) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getwd: %w", err)
-	}
-
-	cliAdapter := hitl.NewCLIAdapter(os.Stdin, os.Stdout)
-	rt, err := BuildRuntime(settings, cwd, append([]RuntimeOption{WithHITLCallbacks(cliAdapter.AskUser, cliAdapter.AskPermission)}, rtOpts...)...)
+	rt, thitl, model, err := assembleREPL(ctx, settings, rtOpts...)
 	if err != nil {
 		return err
 	}
 	defer rt.Close()
 
-	if err := rt.Start(ctx); err != nil {
-		return err
-	}
+	prog := tea.NewProgram(&model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
+	model.p = prog
+	thitl.bind(prog)
 
-	sessionCtx, cancelSession := context.WithCancel(context.Background())
-	defer cancelSession()
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-	defer signal.Stop(sigCh)
-
-	var queryRunning atomic.Bool
-	go func() {
-		for range sigCh {
-			if queryRunning.Load() {
-				rt.Engine.Cancel()
-			} else {
-				cancelSession()
-				return
-			}
-		}
-	}()
-
-	outLog := rt.Logger
-	if outLog == nil {
-		outLog = logger.New(os.Stdout, logger.LevelInfo)
-	}
-	diagLog := logger.Default()
-	outLog.Printf("openharness v0.1.0 | model: %s | cwd: %s\n", settings.Model, cwd)
-	outLog.Println("Type /help for commands, Ctrl-D to exit.")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	for {
-		outLog.Print("> ")
-		if !scanner.Scan() {
-			break
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if line == "/exit" || line == "/quit" {
-			break
-		}
-		if line == "/clear" {
-			rt.Engine.Clear()
-			outLog.Println("Conversation cleared.")
-			continue
-		}
-		if line == "/help" {
-			printHelp(outLog)
-			continue
-		}
-		if line == "/cost" {
-			currentTokens := rt.Engine.CurrentTokens()
-			threshold := rt.Engine.CompactionThreshold()
-			outLog.Printf("Current memory tokens: %d / %d\n", currentTokens, threshold)
-			continue
-		}
-		if line == "/model" || strings.HasPrefix(line, "/model ") || line == "/models" {
-			// /models is alias for listing without switching.
-			isListOnly := line == "/models"
-			arg := ""
-			if strings.HasPrefix(line, "/model ") {
-				arg = strings.TrimSpace(strings.TrimPrefix(line, "/model"))
-			}
-			models := services.ListKnownModels()
-			if isListOnly || arg == "" {
-				outLog.Println("Available models (select number to switch, or /model <id>):")
-				for i, m := range models {
-					cur := ""
-					if m.ID == rt.Settings.Model {
-						cur = "  ← current"
-					}
-					outLog.Printf(" %2d) %-30s %7d tokens%s\n", i+1, m.ID, m.Window, cur)
-				}
-				if isListOnly {
-					continue
-				}
-				outLog.Print("Select number or model id (empty to cancel): ")
-				if !scanner.Scan() {
-					break
-				}
-				choice := strings.TrimSpace(scanner.Text())
-				if choice == "" {
-					outLog.Println("Cancelled.")
-					continue
-				}
-				if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(models) {
-					arg = models[n-1].ID
-				} else {
-					arg = choice
-				}
-			}
-			if arg == "" {
-				continue
-			}
-			if !services.IsKnownModel(arg) {
-				outLog.Printf("Warning: %q not in catalogue, switching anyway.\n", arg)
-			}
-			if err := rt.SwitchModel(arg, false); err != nil {
-				outLog.Printf("Switch failed: %v\n", err)
-				diagLog.Error("switch model", "error", err)
-			} else {
-				outLog.Printf("Switched to %s (%d tokens, threshold %d)\n", arg, services.ContextWindowForModel(arg), rt.Engine.CompactionThreshold())
-			}
-			continue
-		}
-
-		queryRunning.Store(true)
-		err := rt.HandleLine(sessionCtx, line)
-		queryRunning.Store(false)
-		if err != nil && sessionCtx.Err() == nil {
-			diagLog.Error("handle line", "error", err)
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		}
-		if sessionCtx.Err() != nil {
-			outLog.Println("Exiting.")
-			break
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scanner: %w", err)
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
 	}
 	return nil
 }
 
-func printHelp(out logger.Logger) {
-	if out == nil {
-		out = logger.New(os.Stdout, logger.LevelInfo)
+// assembleREPL wires the runtime, the TUI HITL adapter, and the TUI model
+// together. Separated from RunREPL so tests can verify the wiring.
+func assembleREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOption) (*RuntimeBundle, *tuiHITL, tuiModel, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, nil, tuiModel{}, fmt.Errorf("getwd: %w", err)
 	}
-	out.Println("Commands:")
-	out.Println("  /clear          Clear conversation history")
-	out.Println("  /cost           Show token usage")
-	out.Println("  /model [id]     Switch model (picker if no id)")
-	out.Println("  /models         List available models")
-	out.Println("  /help           Show this help")
-	out.Println("  /exit           Exit the REPL")
+
+	thitl := newTUIHITL()
+	rt, err := BuildRuntime(settings, cwd, append([]RuntimeOption{WithHITLCallbacks(thitl.AskUser, thitl.AskPermission)}, rtOpts...)...)
+	if err != nil {
+		return nil, nil, tuiModel{}, err
+	}
+	if err := rt.Start(ctx); err != nil {
+		rt.Close()
+		return nil, nil, tuiModel{}, err
+	}
+	return rt, thitl, newTUIModel(rt, ctx), nil
 }
 
 // RunJSONLinesMode runs a full JSON-Lines protocol session for TUI/IDE/remote.
