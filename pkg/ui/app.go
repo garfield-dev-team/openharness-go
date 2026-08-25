@@ -1,29 +1,32 @@
 package ui
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/openharness/openharness/pkg/config"
 	"github.com/openharness/openharness/pkg/engine"
 	"github.com/openharness/openharness/pkg/hitl"
+	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/protocol"
 	"github.com/openharness/openharness/pkg/services"
+	"github.com/openharness/openharness/pkg/tools"
 )
 
 // RunPrintMode runs in non-interactive mode: sends the prompt, prints the
-// response, and exits. Mirrors Python ui/app.py print mode.
-func RunPrintMode(ctx context.Context, settings *config.Settings, prompt string, outputFormat string) error {
+// response, and exits.
+func RunPrintMode(ctx context.Context, settings *config.Settings, prompt string, outputFormat string, rtOpts ...RuntimeOption) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
 	}
 
-	rt, err := BuildRuntime(settings, cwd)
+	rt, err := BuildRuntime(settings, cwd, rtOpts...)
 	if err != nil {
 		return err
 	}
@@ -41,51 +44,58 @@ func RunPrintMode(ctx context.Context, settings *config.Settings, prompt string,
 	case "stream-json":
 		return printStreamJSON(ch)
 	default:
-		err := printText(ch)
+		out := rt.Logger
+		if out == nil {
+			out = logger.New(os.Stdout, logger.LevelInfo)
+		}
+		err := printText(ch, out)
 		if err == nil {
 			currentTokens := rt.Engine.CurrentTokens()
-			threshold := services.DefaultCompactionConfig().TokenThreshold
+			threshold := rt.Engine.CompactionThreshold()
 			pct := float64(currentTokens) / float64(threshold) * 100
-			
+
 			color := "\033[32m" // green
 			if pct > 80 {
 				color = "\033[31m" // red
 			} else if pct > 50 {
 				color = "\033[33m" // yellow
 			}
-			
-			fmt.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
+
+			out.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
 		}
 		return err
 	}
 }
 
-func printText(ch <-chan engine.StreamEventWithUsage) error {
+func printText(ch <-chan engine.StreamEventWithUsage, out logger.Logger) error {
+	if out == nil {
+		out = logger.New(os.Stdout, logger.LevelInfo)
+	}
 	for ev := range ch {
 		if ev.Event.Error != nil {
 			return ev.Event.Error
 		}
 		switch ev.Event.Type {
 		case engine.EventTextDelta:
-			fmt.Print(ev.Event.Text)
+			out.Print(ev.Event.Text)
 		case engine.EventToolExecutionStarted:
 			argsStr := string(ev.Event.ToolInput)
 			if len(argsStr) > 200 {
 				argsStr = argsStr[:200] + "..."
 			}
 			// ANSI colors: 90 is dark gray (dim), 33 is yellow
-			fmt.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
+			out.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
 		case engine.EventToolExecutionCompleted:
 			if ev.Event.ToolResult != nil && ev.Event.ToolResult.IsError {
 				// 31 is red
-				fmt.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
+				out.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
 			} else {
 				// 32 is green
-				fmt.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
+				out.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
 			}
 		}
 	}
-	fmt.Println()
+	out.Println()
 	return nil
 }
 
@@ -119,77 +129,50 @@ func printStreamJSON(ch <-chan engine.StreamEventWithUsage) error {
 	return nil
 }
 
-// RunREPL starts an interactive read-eval-print loop.
-func RunREPL(ctx context.Context, settings *config.Settings) error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return fmt.Errorf("getwd: %w", err)
-	}
-
-	cliAdapter := hitl.NewCLIAdapter(os.Stdin, os.Stdout)
-	rt, err := BuildRuntime(settings, cwd, WithHITLCallbacks(cliAdapter.AskUser, cliAdapter.AskPermission))
+// RunREPL starts the interactive Bubble Tea TUI: status header, scrolling
+// transcript, slash-autocomplete input, and a model picker.
+//
+// Ctrl-C is two-stage: while a query runs it aborts the query (the session
+// survives); while idle it exits.
+func RunREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOption) error {
+	rt, thitl, model, err := assembleREPL(ctx, settings, rtOpts...)
 	if err != nil {
 		return err
 	}
 	defer rt.Close()
 
-	if err := rt.Start(ctx); err != nil {
-		return err
-	}
+	prog := tea.NewProgram(&model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithContext(ctx))
+	model.p = prog
+	thitl.bind(prog)
 
-	fmt.Printf("openharness v0.1.0 | model: %s | cwd: %s\n", settings.Model, cwd)
-	fmt.Println("Type /help for commands, Ctrl-D to exit.")
-
-	scanner := bufio.NewScanner(os.Stdin)
-	for {
-		fmt.Print("> ")
-		if !scanner.Scan() {
-			break
-		}
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		if line == "/exit" || line == "/quit" {
-			break
-		}
-		if line == "/clear" {
-			rt.Engine.Clear()
-			fmt.Println("Conversation cleared.")
-			continue
-		}
-		if line == "/help" {
-			printHelp()
-			continue
-		}
-		if line == "/cost" {
-			currentTokens := rt.Engine.CurrentTokens()
-			threshold := services.DefaultCompactionConfig().TokenThreshold
-			fmt.Printf("Current memory tokens: %d / %d\n", currentTokens, threshold)
-			continue
-		}
-
-		if err := rt.HandleLine(ctx, line); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("scanner: %w", err)
+	if _, err := prog.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
 	}
 	return nil
 }
 
-func printHelp() {
-	fmt.Println("Commands:")
-	fmt.Println("  /clear   Clear conversation history")
-	fmt.Println("  /cost    Show token usage")
-	fmt.Println("  /help    Show this help")
-	fmt.Println("  /exit    Exit the REPL")
+// assembleREPL wires the runtime, the TUI HITL adapter, and the TUI model
+// together. Separated from RunREPL so tests can verify the wiring.
+func assembleREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOption) (*RuntimeBundle, *tuiHITL, tuiModel, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, nil, tuiModel{}, fmt.Errorf("getwd: %w", err)
+	}
+
+	thitl := newTUIHITL()
+	rt, err := BuildRuntime(settings, cwd, append([]RuntimeOption{WithHITLCallbacks(thitl.AskUser, thitl.AskPermission)}, rtOpts...)...)
+	if err != nil {
+		return nil, nil, tuiModel{}, err
+	}
+	if err := rt.Start(ctx); err != nil {
+		rt.Close()
+		return nil, nil, tuiModel{}, err
+	}
+	return rt, thitl, newTUIModel(rt, ctx), nil
 }
 
 // RunJSONLinesMode runs a full JSON-Lines protocol session for TUI/IDE/remote.
-func RunJSONLinesMode(ctx context.Context, settings *config.Settings) error {
+func RunJSONLinesMode(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOption) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("getwd: %w", err)
@@ -199,7 +182,7 @@ func RunJSONLinesMode(ctx context.Context, settings *config.Settings) error {
 	manager := hitl.NewManager(jlAdapter.EmitFn())
 	jlAdapter.SetManager(manager)
 
-	rt, err := BuildRuntime(settings, cwd, WithHITLCallbacks(manager.AskQuestion, manager.AskPermission))
+	rt, err := BuildRuntime(settings, cwd, append([]RuntimeOption{WithHITLCallbacks(manager.AskQuestion, manager.AskPermission)}, rtOpts...)...)
 	if err != nil {
 		return err
 	}
@@ -209,10 +192,51 @@ func RunJSONLinesMode(ctx context.Context, settings *config.Settings) error {
 		return err
 	}
 
-	jlAdapter.EmitFn()(&protocol.BackendEvent{
+	emit := jlAdapter.EmitFn()
+	emit(&protocol.BackendEvent{
 		Type: protocol.BEReady,
 		Text: fmt.Sprintf("openharness v0.1.0 | model: %s | cwd: %s", settings.Model, cwd),
 	})
+
+	// dispatchSubmission submits a line under the given delivery kind and
+	// streams its lifecycle + transcript events back over the protocol.
+	dispatchSubmission := func(kind engine.SubmissionKind, line string) {
+		ch := rt.Engine.Submit(kind, line)
+		go func() {
+			for ev := range ch {
+				switch ev.Event.Type {
+				case engine.EventQueued:
+					emit(&protocol.BackendEvent{Type: protocol.BEQueued})
+				case engine.EventDelivered:
+					emit(&protocol.BackendEvent{Type: protocol.BEDelivered})
+				case engine.EventUndelivered:
+					emit(&protocol.BackendEvent{Type: protocol.BEError, Text: "submission aborted before delivery"})
+				case engine.EventAborted:
+					emit(&protocol.BackendEvent{Type: protocol.BEError, Text: "aborted"})
+				case engine.EventTextDelta:
+					emit(&protocol.BackendEvent{Type: protocol.BEAssistantDelta, Text: ev.Event.Text})
+				case engine.EventReasoningDelta:
+					emit(&protocol.BackendEvent{Type: protocol.BEReasoningDelta, Text: ev.Event.Text})
+				case engine.EventToolExecutionStarted:
+					emit(&protocol.BackendEvent{
+						Type:     protocol.BEToolStarted,
+						Text:     ev.Event.ToolName,
+						Extra:    map[string]any{"tool_use_id": ev.Event.ToolUseID},
+					})
+				case engine.EventToolExecutionCompleted:
+					emit(&protocol.BackendEvent{
+						Type:     protocol.BEToolCompleted,
+						Text:     ev.Event.ToolName,
+						Error:    toolErrorString(ev.Event.ToolResult),
+						Extra:    map[string]any{"tool_use_id": ev.Event.ToolUseID},
+					})
+				case engine.EventError:
+					emit(&protocol.BackendEvent{Type: protocol.BEError, Error: ev.Event.Error.Error()})
+				}
+			}
+			emit(&protocol.BackendEvent{Type: protocol.BELineComplete})
+		}()
+	}
 
 	go func() {
 		if err := jlAdapter.StartReadLoop(ctx); err != nil {
@@ -223,15 +247,56 @@ func RunJSONLinesMode(ctx context.Context, settings *config.Settings) error {
 	for {
 		select {
 		case req := <-jlAdapter.IncomingRequests():
-			if req.Type == protocol.FRSubmitLine {
-				go func(line string) {
-					_ = rt.HandleLine(ctx, line)
-				}(req.Line)
-			} else if req.Type == protocol.FRShutdown {
+			switch req.Type {
+			case protocol.FRSubmitLine:
+				dispatchSubmission(engine.SubmissionNewTurn, req.Line)
+			case protocol.FRQueueMessage:
+				kind := engine.SubmissionSteering
+				if req.Kind == string(engine.SubmissionFollowUp) {
+					kind = engine.SubmissionFollowUp
+				}
+				dispatchSubmission(kind, req.Line)
+			case protocol.FRListModels:
+				models := services.ListKnownModels()
+				emit(&protocol.BackendEvent{
+					Type:  protocol.BEModelsList,
+					Extra: map[string]any{"models": models, "current": rt.Settings.Model},
+				})
+			case protocol.FRSetModel:
+				model := req.Model
+				if model == "" {
+					model = req.Line
+				}
+				persist := req.Persist != nil && *req.Persist
+				if model == "" {
+					emit(&protocol.BackendEvent{Type: protocol.BEError, Error: "set_model: missing model"})
+					continue
+				}
+				if !services.IsKnownModel(model) {
+					// Still allow, but frontend picker would have filtered; warn via error extra?
+				}
+				if err := rt.SwitchModel(model, persist); err != nil {
+					emit(&protocol.BackendEvent{Type: protocol.BEError, Error: err.Error()})
+				} else {
+					emit(&protocol.BackendEvent{Type: protocol.BESetModel, Text: model, Extra: map[string]any{"persisted": persist}})
+					st := rt.AppState.Get()
+					emit(&protocol.BackendEvent{
+						Type:  protocol.BEStateSnapshot,
+						Extra: map[string]any{"model": st.Model, "provider": st.Provider, "base_url": st.BaseURL, "auth_status": st.AuthStatus},
+					})
+				}
+			case protocol.FRShutdown:
 				return nil
 			}
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
+}
+
+func toolErrorString(r *tools.ToolResult) string {
+	if r != nil && r.IsError {
+		return r.Output
+	}
+	return ""
 }

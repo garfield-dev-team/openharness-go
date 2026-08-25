@@ -38,6 +38,9 @@ func (a *apiClientAdapter) StreamMessage(ctx context.Context, params engine.LLMR
 				outCh <- engine.LLMStreamEvent{Err: ev.Err}
 				continue
 			}
+			if ev.ReasoningDelta != "" {
+				outCh <- engine.LLMStreamEvent{ReasoningDelta: ev.ReasoningDelta}
+			}
 			if ev.TextDelta != nil {
 				outCh <- engine.LLMStreamEvent{TextDelta: ev.TextDelta.Text}
 			}

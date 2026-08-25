@@ -24,10 +24,22 @@ type EventType string
 const (
 	EventModelTurnStarted       EventType = "model_turn_started"
 	EventTextDelta              EventType = "text_delta"
+	EventReasoningDelta         EventType = "reasoning_delta"
 	EventAssistantTurnComplete  EventType = "assistant_turn_complete"
 	EventToolExecutionStarted   EventType = "tool_execution_started"
 	EventToolExecutionCompleted EventType = "tool_execution_completed"
 	EventError                  EventType = "error"
+
+	// Submission lifecycle events, emitted by QueryEngine on a submission's
+	// channel: accepted into the queue, merged into the conversation, or
+	// dropped without delivery because the running query was aborted.
+	EventQueued      EventType = "queued"
+	EventDelivered   EventType = "delivered"
+	EventUndelivered EventType = "undelivered"
+
+	// EventAborted reports that the query was cancelled (e.g. Ctrl-C) and
+	// the session remains usable.
+	EventAborted EventType = "aborted"
 )
 
 // StreamEvent is a single event emitted during a query.
@@ -95,10 +107,11 @@ type HookExecutor interface {
 
 // LLMStreamEvent is a single token/event from the LLM streaming response.
 type LLMStreamEvent struct {
-	TextDelta string
-	Message   *types.ConversationMessage
-	Usage     *types.UsageSnapshot
-	Err       error
+	TextDelta      string
+	ReasoningDelta string
+	Message        *types.ConversationMessage
+	Usage          *types.UsageSnapshot
+	Err            error
 }
 
 // StreamingLLMClient abstracts the LLM API.
@@ -130,9 +143,19 @@ type QueryContext struct {
 	MaxTokens         int
 	MaxTurns          int
 	HookExecutor      HookExecutor
+	CompactionConfig  *services.CompactionConfig
 
 	AskUser       tools.AskUserFunc
 	AskPermission tools.AskPermissionFunc
+
+	// OnMessageAppended observes every message appended to the conversation,
+	// in append order. Used to mirror history into durable session storage.
+	OnMessageAppended func(types.ConversationMessage)
+
+	// DrainSteering is invoked at the delivery point after tool results are
+	// appended and before the next LLM call. Returned messages are appended
+	// verbatim to the conversation (and passed through OnMessageAppended).
+	DrainSteering func() []types.ConversationMessage
 }
 
 // ---------------------------------------------------------------------------
@@ -152,12 +175,22 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 		defer close(ch)
 
 		for turn := 0; turn < maxTurns; turn++ {
+			if ctx.Err() != nil {
+				ch <- StreamEventWithUsage{Event: StreamEvent{Type: EventAborted}}
+				return
+			}
+
 			// L1/L2 inline fast compaction within the turn loop
 			// If we generated massive tool results in previous turns, compress them
 			// before sending the next request to prevent token blowout mid-loop.
-			config := services.DefaultCompactionConfig()
-			if services.ShouldCompact(*messages, config) {
-				services.RunPipeline(ctx, *messages, config, nil, nil) // no summarizeFn, so only L1-L4 executes
+			cfg := qctx.CompactionConfig
+			if cfg == nil {
+				cfg = services.ResolveCompactionConfig(qctx.Model, 0, 0)
+			}
+			if services.ShouldCompact(*messages, cfg) {
+				if compacted, err := services.RunPipeline(ctx, *messages, cfg, nil, nil); err == nil {
+					*messages = compacted
+				}
 			}
 
 			params := LLMRequestParams{
@@ -189,6 +222,11 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 						Event: StreamEvent{Type: EventTextDelta, Text: ev.TextDelta},
 					}
 				}
+				if ev.ReasoningDelta != "" {
+					ch <- StreamEventWithUsage{
+						Event: StreamEvent{Type: EventReasoningDelta, Text: ev.ReasoningDelta},
+					}
+				}
 				if ev.Message != nil {
 					assistantMsg = ev.Message
 				}
@@ -198,6 +236,10 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 			}
 
 			if assistantMsg == nil {
+				if ctx.Err() != nil {
+					ch <- StreamEventWithUsage{Event: StreamEvent{Type: EventAborted}}
+					return
+				}
 				ch <- StreamEventWithUsage{Event: StreamEvent{
 					Type:  EventError,
 					Error: fmt.Errorf("LLM stream ended without a complete message"),
@@ -206,6 +248,9 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 			}
 
 			*messages = append(*messages, *assistantMsg)
+			if qctx.OnMessageAppended != nil {
+				qctx.OnMessageAppended(*assistantMsg)
+			}
 
 			ch <- StreamEventWithUsage{
 				Event: StreamEvent{Type: EventAssistantTurnComplete},
@@ -268,6 +313,24 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 				Role:    "user",
 				Content: toolResultContents,
 			})
+			if qctx.OnMessageAppended != nil {
+				qctx.OnMessageAppended(types.ConversationMessage{
+					Role:    "user",
+					Content: toolResultContents,
+				})
+			}
+
+			// Delivery point A (steering): inject queued steering submissions
+			// after tool results and before the next LLM call. An aborted
+			// query never injects; its queue is returned to the frontends.
+			if qctx.DrainSteering != nil && ctx.Err() == nil {
+				for _, m := range qctx.DrainSteering() {
+					*messages = append(*messages, m)
+					if qctx.OnMessageAppended != nil {
+						qctx.OnMessageAppended(m)
+					}
+				}
+			}
 		}
 
 		ch <- StreamEventWithUsage{Event: StreamEvent{

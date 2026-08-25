@@ -7,16 +7,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/types"
 )
 
 const defaultOpenAIBaseURL = "https://api.openai.com/v1"
+
+// debugSSE dumps raw SSE lines to stderr when OPENHARNESS_DEBUG is set —
+// a diagnostic aid for providers that stream unrecognized payload shapes.
+var debugSSE = os.Getenv("OPENHARNESS_DEBUG") != ""
 
 // OpenAIApiClient is a wrapper around net/http that calls OpenAI-compatible
 // Chat Completions API with retry logic and SSE streaming.
@@ -66,8 +71,8 @@ func (c *OpenAIApiClient) StreamMessage(ctx context.Context, req *ApiMessageRequ
 			if ae, ok := err.(*apiHTTPError); ok {
 				statusStr = strconv.Itoa(ae.StatusCode)
 			}
-			log.Printf("OpenAI API request failed (attempt %d/%d, status=%s), retrying in %.1fs: %v",
-				attempt+1, MaxRetries+1, statusStr, delay.Seconds(), err)
+			logger.Default().Warn("OpenAI API request failed, retrying",
+				"attempt", attempt+1, "max", MaxRetries+1, "status", statusStr, "delay", delay.String(), "error", err.Error())
 			select {
 			case <-ctx.Done():
 				sendError(events, ctx.Err())
@@ -247,6 +252,7 @@ type openaiStreamChunk struct {
 		Delta struct {
 			Content          string           `json:"content"`
 			ReasoningContent string           `json:"reasoning_content"`
+			Reasoning        string           `json:"reasoning"` // OpenRouter-style reasoning field
 			ToolCalls        []openaiToolCall `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
@@ -273,7 +279,9 @@ func (c *OpenAIApiClient) streamOnce(
 		return fmt.Errorf("create http request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.client.Do(httpReq)
@@ -308,6 +316,13 @@ func (c *OpenAIApiClient) streamOnce(
 		if data == "[DONE]" {
 			break
 		}
+		if debugSSE {
+			sample := data
+			if len(sample) > 500 {
+				sample = sample[:500] + "..."
+			}
+			logger.Default().Debug("[openharness debug:sse]", "sample", sample)
+		}
 
 		var chunk openaiStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
@@ -325,8 +340,11 @@ func (c *OpenAIApiClient) streamOnce(
 				stopReason = choice.FinishReason
 			}
 
-			if choice.Delta.ReasoningContent != "" {
-				reasoningBuilder.WriteString(choice.Delta.ReasoningContent)
+			// Providers disagree on the reasoning field: DeepSeek-style
+			// servers use reasoning_content, OpenRouter uses reasoning.
+			if reasoning := choice.Delta.ReasoningContent + choice.Delta.Reasoning; reasoning != "" {
+				reasoningBuilder.WriteString(reasoning)
+				events <- ApiStreamEvent{ReasoningDelta: reasoning}
 			}
 
 			if choice.Delta.Content != "" {

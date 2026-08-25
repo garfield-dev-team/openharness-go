@@ -16,11 +16,24 @@ type ProviderInfo struct {
 
 // DetectProvider infers the active provider from the current settings.
 func DetectProvider(s config.Settings) ProviderInfo {
+	baseURLLower := strings.ToLower(derefString(s.BaseURL))
+	modelLower := strings.ToLower(s.Model)
+	if strings.Contains(baseURLLower, "opencode") || strings.HasPrefix(modelLower, "muse-spark") {
+		return ProviderInfo{Name: "opencode", AuthKind: "none", VoiceSupported: false, VoiceReason: "voice mode currently requires a dedicated Claude.ai-style provider"}
+	}
 	if s.Provider != "" {
 		providerName := strings.ToLower(s.Provider)
+		if strings.Contains(providerName, "opencode") {
+			return ProviderInfo{
+				Name:           "opencode",
+				AuthKind:       "none",
+				VoiceSupported: false,
+				VoiceReason:    "voice mode currently requires a dedicated Claude.ai-style provider",
+			}
+		}
 		authKind := "api_key"
 		voiceReason := "voice mode currently requires a dedicated Claude.ai-style provider"
-		
+
 		if strings.Contains(providerName, "bedrock") {
 			authKind = "aws"
 			voiceReason = "voice mode is not wired for Bedrock in this build"
@@ -37,8 +50,8 @@ func DetectProvider(s config.Settings) ProviderInfo {
 		}
 	}
 
-	baseURL := strings.ToLower(derefString(s.BaseURL))
-	model := strings.ToLower(s.Model)
+	baseURL := baseURLLower
+	model := modelLower
 
 	if strings.Contains(baseURL, "moonshot") || strings.HasPrefix(model, "kimi") {
 		return ProviderInfo{Name: "moonshot-anthropic-compatible", AuthKind: "api_key", VoiceReason: "voice mode requires a Claude.ai-style authenticated voice backend"}
@@ -62,6 +75,9 @@ func DetectProvider(s config.Settings) ProviderInfo {
 func AuthStatus(s config.Settings) string {
 	if s.APIKey != "" {
 		return "configured"
+	}
+	if pi := DetectProvider(s); pi.Name == "opencode" {
+		return "configured (opencode, no key required)"
 	}
 	return "missing"
 }

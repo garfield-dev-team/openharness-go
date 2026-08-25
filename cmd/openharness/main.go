@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 
 	"github.com/openharness/openharness/pkg/config"
+	"github.com/openharness/openharness/pkg/onboard"
 	"github.com/openharness/openharness/pkg/ui"
 	"github.com/spf13/cobra"
 )
@@ -21,22 +21,24 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	var (
-		flagModel          string
-		flagProvider       string
-		flagAPIKey         string
-		flagBaseURL        string
-		flagMaxTokens      int
-		flagSystemPrompt   string
-		flagPermissionMode string
-		flagOutputFormat   string
-		flagVerbose        bool
-		flagFast           bool
-		flagEffort         string
-		flagPasses         int
-		flagPrint          bool
-		flagPrompt         string
-		flagResume         string
-		flagContinue       bool
+		flagModel               string
+		flagProvider            string
+		flagAPIKey              string
+		flagBaseURL             string
+		flagMaxTokens           int
+		flagContextWindow       int
+		flagCompactionThreshold int
+		flagSystemPrompt        string
+		flagPermissionMode      string
+		flagOutputFormat        string
+		flagVerbose             bool
+		flagFast                bool
+		flagEffort              string
+		flagPasses              int
+		flagPrint               bool
+		flagPrompt              string
+		flagResume              string
+		flagContinue            bool
 	)
 
 	root := &cobra.Command{
@@ -49,30 +51,49 @@ func newRootCmd() *cobra.Command {
 				return fmt.Errorf("load settings: %w", err)
 			}
 			applyFlags(&settings, flagModel, flagProvider, flagAPIKey, flagBaseURL, flagMaxTokens,
+				flagContextWindow, flagCompactionThreshold,
 				flagSystemPrompt, flagPermissionMode, flagOutputFormat,
 				flagVerbose, flagFast, flagEffort, flagPasses)
 
-			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-			defer stop()
+			// First-run onboarding: no key from flags, config file, or env.
+			// Interactive sessions get the setup wizard; non-interactive
+			// invocations fall through to the standard missing-key error.
+			if onboard.Needed(&settings) {
+				if !onboard.IsTerminal() {
+					_, keyErr := settings.ResolveAPIKey()
+					return keyErr
+				}
+				if err := onboard.Run(&settings, onboard.Options{Terminal: true}); err != nil {
+					return err
+				}
+				fmt.Println()
+			}
+			// Signal policy: the REPL installs its own two-stage Ctrl-C
+			// handler (first press aborts the query, second exits); other
+			// modes rely on the default SIGINT behavior.
+			ctx := context.Background()
+
+			var rtOpts []ui.RuntimeOption
+			switch {
+			case flagResume != "":
+				rtOpts = append(rtOpts, ui.WithResumeSession(flagResume))
+			case flagContinue:
+				rtOpts = append(rtOpts, ui.WithContinueLastSession())
+			}
 
 			// -p prompt: non-interactive single shot
 			if flagPrompt != "" {
-				return ui.RunPrintMode(ctx, &settings, flagPrompt, flagOutputFormat)
+				return ui.RunPrintMode(ctx, &settings, flagPrompt, flagOutputFormat, rtOpts...)
 			}
 
 			// --print: read stdin, print response
 			if flagPrint {
 				prompt := readStdin()
-				return ui.RunPrintMode(ctx, &settings, prompt, flagOutputFormat)
-			}
-
-			// --resume / --continue: placeholder
-			if flagResume != "" || flagContinue {
-				return fmt.Errorf("--resume and --continue are not yet implemented")
+				return ui.RunPrintMode(ctx, &settings, prompt, flagOutputFormat, rtOpts...)
 			}
 
 			// Default: interactive REPL
-			return ui.RunREPL(ctx, &settings)
+			return ui.RunREPL(ctx, &settings, rtOpts...)
 		},
 	}
 
@@ -82,6 +103,8 @@ func newRootCmd() *cobra.Command {
 	f.StringVar(&flagAPIKey, "api-key", "", "API key")
 	f.StringVar(&flagBaseURL, "base-url", "", "Base URL for the API")
 	f.IntVar(&flagMaxTokens, "max-tokens", 0, "Maximum output tokens")
+	f.IntVar(&flagContextWindow, "context-window", 0, "Context window size (0 = auto per model)")
+	f.IntVar(&flagCompactionThreshold, "compaction-threshold", 0, "Compaction token threshold (0 = 80% of window)")
 	f.StringVar(&flagSystemPrompt, "system-prompt", "", "Custom system prompt")
 	f.StringVar(&flagPermissionMode, "permission-mode", "", "Permission mode (default, plan, full_auto)")
 	f.StringVar(&flagOutputFormat, "output-format", "text", "Output format (text, json, stream-json)")
@@ -101,7 +124,7 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-func applyFlags(s *config.Settings, model, provider, apiKey, baseURL string, maxTokens int,
+func applyFlags(s *config.Settings, model, provider, apiKey, baseURL string, maxTokens, contextWindow, compactionThreshold int,
 	systemPrompt, permissionMode, outputFormat string,
 	verbose, fast bool, effort string, passes int) {
 
@@ -119,6 +142,12 @@ func applyFlags(s *config.Settings, model, provider, apiKey, baseURL string, max
 	}
 	if maxTokens > 0 {
 		s.MaxTokens = maxTokens
+	}
+	if contextWindow > 0 {
+		s.ContextWindow = contextWindow
+	}
+	if compactionThreshold > 0 {
+		s.CompactionThreshold = compactionThreshold
 	}
 	if systemPrompt != "" {
 		s.SystemPrompt = &systemPrompt
@@ -259,23 +288,16 @@ func newAuthCmd() *cobra.Command {
 	})
 	cmd.AddCommand(&cobra.Command{
 		Use:   "login",
-		Short: "Configure API key",
+		Short: "Configure provider and API key (interactive setup wizard)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Print("Enter API key: ")
-			var key string
-			if _, err := fmt.Scanln(&key); err != nil {
-				return err
-			}
 			settings, err := config.LoadSettings()
 			if err != nil {
-				return err
+				return fmt.Errorf("load settings: %w", err)
 			}
-			settings.APIKey = key
-			if err := config.SaveSettings(settings); err != nil {
-				return err
+			if !onboard.IsTerminal() {
+				return fmt.Errorf("auth login requires an interactive terminal")
 			}
-			fmt.Println("API key saved.")
-			return nil
+			return onboard.Run(&settings, onboard.Options{Terminal: true})
 		},
 	})
 	cmd.AddCommand(&cobra.Command{

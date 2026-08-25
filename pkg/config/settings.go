@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,10 @@ type Settings struct {
 	EnabledPlugins map[string]bool                   `json:"enabled_plugins"`
 	McpServers     map[string]McpServerConfig        `json:"mcp_servers"`
 
+	// Context / compaction (0 = auto from model registry)
+	ContextWindow       int `json:"context_window,omitempty"`
+	CompactionThreshold int `json:"compaction_threshold,omitempty"`
+
 	// UI
 	Theme       string `json:"theme"`
 	OutputStyle string `json:"output_style"`
@@ -141,7 +146,24 @@ func DefaultSettings() Settings {
 	}
 }
 
+// isOpencode reports whether the settings target the free OpenCode Zen
+// endpoint (https://opencode.ai/zen/v1 / muse-spark-*) which requires no API key.
+func (s Settings) isOpencode() bool {
+	if strings.EqualFold(s.Provider, "opencode") {
+		return true
+	}
+	if s.BaseURL != nil && strings.Contains(strings.ToLower(*s.BaseURL), "opencode") {
+		return true
+	}
+	if strings.HasPrefix(strings.ToLower(s.Model), "muse-spark") {
+		return true
+	}
+	return false
+}
+
 // ResolveAPIKey resolves the API key: instance value > env var > error.
+// The OpenCode Zen provider (opencode.ai/zen/v1) is free and returns ""
+// without error.
 func (s Settings) ResolveAPIKey() (string, error) {
 	if s.APIKey != "" {
 		return s.APIKey, nil
@@ -150,7 +172,10 @@ func (s Settings) ResolveAPIKey() (string, error) {
 	if envKey != "" {
 		return envKey, nil
 	}
-	return "", fmt.Errorf("no API key found; set ANTHROPIC_API_KEY or configure api_key in %s", GetConfigFilePath())
+	if s.isOpencode() {
+		return "", nil
+	}
+	return "", fmt.Errorf("no API key found; run `openharness auth login` (interactive setup), set ANTHROPIC_API_KEY, or configure api_key in %s", GetConfigFilePath())
 }
 
 // ---------------------------------------------------------------------------

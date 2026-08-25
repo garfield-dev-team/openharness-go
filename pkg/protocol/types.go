@@ -21,6 +21,7 @@ const (
 	BETasksSnapshot     BackendEventType = "tasks_snapshot"
 	BETranscriptItem    BackendEventType = "transcript_item"
 	BEAssistantDelta    BackendEventType = "assistant_delta"
+	BEReasoningDelta    BackendEventType = "reasoning_delta"
 	BEAssistantComplete BackendEventType = "assistant_complete"
 	BELineComplete      BackendEventType = "line_complete"
 	BEToolStarted       BackendEventType = "tool_started"
@@ -29,9 +30,17 @@ const (
 	BEError             BackendEventType = "error"
 	BEShutdown          BackendEventType = "shutdown"
 
+	// Submission lifecycle receipts: a queued message was accepted, or was
+	// merged into the conversation at a delivery point.
+	BEQueued    BackendEventType = "queued"
+	BEDelivered BackendEventType = "delivered"
+
 	// HITL events – require a frontend response to unblock the engine.
 	BEModalRequest  BackendEventType = "modal_request"
 	BESelectRequest BackendEventType = "select_request"
+
+	BEModelsList BackendEventType = "models_list"
+	BESetModel   BackendEventType = "set_model"
 )
 
 type ModalKind string
@@ -78,9 +87,12 @@ type FrontendRequestType string
 
 const (
 	FRSubmitLine         FrontendRequestType = "submit_line"
+	FRQueueMessage       FrontendRequestType = "queue_message" // kind: "steering" | "follow_up"
 	FRQuestionResponse   FrontendRequestType = "question_response"
 	FRPermissionResponse FrontendRequestType = "permission_response"
 	FRListSessions       FrontendRequestType = "list_sessions"
+	FRListModels         FrontendRequestType = "list_models"
+	FRSetModel           FrontendRequestType = "set_model"
 	FRShutdown           FrontendRequestType = "shutdown"
 )
 
@@ -88,8 +100,11 @@ type FrontendRequest struct {
 	Type      FrontendRequestType `json:"type"`
 	RequestID string              `json:"request_id,omitempty"`
 	Line      string              `json:"line,omitempty"`
+	Kind      string              `json:"kind,omitempty"` // queue_message delivery kind
 	Answer    string              `json:"answer,omitempty"`
 	Allowed   *bool               `json:"allowed,omitempty"`
+	Model     string              `json:"model,omitempty"`
+	Persist   *bool               `json:"persist,omitempty"`
 }
 
 func ParseFrontendRequest(data []byte) (*FrontendRequest, error) {

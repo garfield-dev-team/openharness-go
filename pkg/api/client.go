@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/types"
 )
 
@@ -52,6 +52,7 @@ type ApiMessageRequest struct {
 // ApiStreamEvent is the union type for streaming events.
 type ApiStreamEvent struct {
 	TextDelta       *ApiTextDeltaEvent
+	ReasoningDelta  string
 	MessageComplete *ApiMessageCompleteEvent
 	Err             error
 }
@@ -130,8 +131,8 @@ func (c *AnthropicApiClient) StreamMessage(ctx context.Context, req *ApiMessageR
 			if ae, ok := err.(*apiHTTPError); ok {
 				statusStr = strconv.Itoa(ae.StatusCode)
 			}
-			log.Printf("API request failed (attempt %d/%d, status=%s), retrying in %.1fs: %v",
-				attempt+1, MaxRetries+1, statusStr, delay.Seconds(), err)
+			logger.Default().Warn("API request failed, retrying",
+				"attempt", attempt+1, "max", MaxRetries+1, "status", statusStr, "delay", delay.String(), "error", err.Error())
 			select {
 			case <-ctx.Done():
 				sendError(events, ctx.Err())
@@ -187,7 +188,9 @@ func (c *AnthropicApiClient) streamOnce(
 		return fmt.Errorf("create http request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("X-Api-Key", c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("X-Api-Key", c.apiKey)
+	}
 	httpReq.Header.Set("Anthropic-Version", apiVersion)
 	httpReq.Header.Set("Accept", "text/event-stream")
 

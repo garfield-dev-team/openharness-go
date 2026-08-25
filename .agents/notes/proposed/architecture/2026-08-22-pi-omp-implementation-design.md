@@ -769,4 +769,10 @@ stateDiagram-v2
 3. §4 流规则的重试会放大 token 消耗（同 turn 重发），maxRetries 默认 2 且规则命中要计入 usage 统计。
 4. §6 worktree 依赖 git 存在与工作树干净度，降级路径（共享目录+警告）必须实现，不能 hard fail。
 
+## 实施进度
+
+- **一期（§0+§2+§3）已落地**：`pkg/session` 树形存储（append-only JSONL、断尾恢复、NavigateTo/ForkTo/ListIDs）；QueryEngine 单飞队列（NewTurn/Steering/FollowUp 三类提交，RunQuery 投递点 A 在 tool result 之后、下次 LLM 调用之前注入）；abort 时未投递 steering 以 undelivered 回执退回；REPL 两段式 Ctrl-C（第一段取消当前 query，第二段退出）；`--resume`/`--continue` 经 BuildRuntime 真实接线；JSONLines 协议新增 FRQueueMessage / BEQueued / BEDelivered。测试：session 往返与断尾恢复、`-race` 并发 Submit 串行化、steering 注入位置、follow-up 接续、abort 退回，以及 BuildRuntime→store 防拆线测试（pkg/ui/runtime_test.go）。
+- §1、§4–§10 仍为 proposed。
+
+
 
