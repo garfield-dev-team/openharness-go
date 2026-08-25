@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
 	"github.com/openharness/openharness/pkg/config"
 	"github.com/openharness/openharness/pkg/engine"
 	"github.com/openharness/openharness/pkg/hitl"
+	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/protocol"
 	"github.com/openharness/openharness/pkg/services"
 	"github.com/openharness/openharness/pkg/tools"
@@ -44,51 +46,58 @@ func RunPrintMode(ctx context.Context, settings *config.Settings, prompt string,
 	case "stream-json":
 		return printStreamJSON(ch)
 	default:
-		err := printText(ch)
+		out := rt.Logger
+		if out == nil {
+			out = logger.New(os.Stdout, logger.LevelInfo)
+		}
+		err := printText(ch, out)
 		if err == nil {
 			currentTokens := rt.Engine.CurrentTokens()
-			threshold := services.DefaultCompactionConfig().TokenThreshold
+			threshold := rt.Engine.CompactionThreshold()
 			pct := float64(currentTokens) / float64(threshold) * 100
-			
+
 			color := "\033[32m" // green
 			if pct > 80 {
 				color = "\033[31m" // red
 			} else if pct > 50 {
 				color = "\033[33m" // yellow
 			}
-			
-			fmt.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
+
+			out.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
 		}
 		return err
 	}
 }
 
-func printText(ch <-chan engine.StreamEventWithUsage) error {
+func printText(ch <-chan engine.StreamEventWithUsage, out logger.Logger) error {
+	if out == nil {
+		out = logger.New(os.Stdout, logger.LevelInfo)
+	}
 	for ev := range ch {
 		if ev.Event.Error != nil {
 			return ev.Event.Error
 		}
 		switch ev.Event.Type {
 		case engine.EventTextDelta:
-			fmt.Print(ev.Event.Text)
+			out.Print(ev.Event.Text)
 		case engine.EventToolExecutionStarted:
 			argsStr := string(ev.Event.ToolInput)
 			if len(argsStr) > 200 {
 				argsStr = argsStr[:200] + "..."
 			}
 			// ANSI colors: 90 is dark gray (dim), 33 is yellow
-			fmt.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
+			out.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
 		case engine.EventToolExecutionCompleted:
 			if ev.Event.ToolResult != nil && ev.Event.ToolResult.IsError {
 				// 31 is red
-				fmt.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
+				out.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
 			} else {
 				// 32 is green
-				fmt.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
+				out.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
 			}
 		}
 	}
-	fmt.Println()
+	out.Println()
 	return nil
 }
 
@@ -161,12 +170,17 @@ func RunREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOp
 		}
 	}()
 
-	fmt.Printf("openharness v0.1.0 | model: %s | cwd: %s\n", settings.Model, cwd)
-	fmt.Println("Type /help for commands, Ctrl-D to exit.")
+	outLog := rt.Logger
+	if outLog == nil {
+		outLog = logger.New(os.Stdout, logger.LevelInfo)
+	}
+	diagLog := logger.Default()
+	outLog.Printf("openharness v0.1.0 | model: %s | cwd: %s\n", settings.Model, cwd)
+	outLog.Println("Type /help for commands, Ctrl-D to exit.")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("> ")
+		outLog.Print("> ")
 		if !scanner.Scan() {
 			break
 		}
@@ -179,17 +193,66 @@ func RunREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOp
 		}
 		if line == "/clear" {
 			rt.Engine.Clear()
-			fmt.Println("Conversation cleared.")
+			outLog.Println("Conversation cleared.")
 			continue
 		}
 		if line == "/help" {
-			printHelp()
+			printHelp(outLog)
 			continue
 		}
 		if line == "/cost" {
 			currentTokens := rt.Engine.CurrentTokens()
-			threshold := services.DefaultCompactionConfig().TokenThreshold
-			fmt.Printf("Current memory tokens: %d / %d\n", currentTokens, threshold)
+			threshold := rt.Engine.CompactionThreshold()
+			outLog.Printf("Current memory tokens: %d / %d\n", currentTokens, threshold)
+			continue
+		}
+		if line == "/model" || strings.HasPrefix(line, "/model ") || line == "/models" {
+			// /models is alias for listing without switching.
+			isListOnly := line == "/models"
+			arg := ""
+			if strings.HasPrefix(line, "/model ") {
+				arg = strings.TrimSpace(strings.TrimPrefix(line, "/model"))
+			}
+			models := services.ListKnownModels()
+			if isListOnly || arg == "" {
+				outLog.Println("Available models (select number to switch, or /model <id>):")
+				for i, m := range models {
+					cur := ""
+					if m.ID == rt.Settings.Model {
+						cur = "  ← current"
+					}
+					outLog.Printf(" %2d) %-30s %7d tokens%s\n", i+1, m.ID, m.Window, cur)
+				}
+				if isListOnly {
+					continue
+				}
+				outLog.Print("Select number or model id (empty to cancel): ")
+				if !scanner.Scan() {
+					break
+				}
+				choice := strings.TrimSpace(scanner.Text())
+				if choice == "" {
+					outLog.Println("Cancelled.")
+					continue
+				}
+				if n, err := strconv.Atoi(choice); err == nil && n >= 1 && n <= len(models) {
+					arg = models[n-1].ID
+				} else {
+					arg = choice
+				}
+			}
+			if arg == "" {
+				continue
+			}
+			if !services.IsKnownModel(arg) {
+				outLog.Printf("Warning: %q not in catalogue, switching anyway.\n", arg)
+			}
+			if err := rt.SwitchModel(arg, false); err != nil {
+				outLog.Printf("Switch failed: %v\n", err)
+				diagLog.Error("switch model", "error", err)
+			} else {
+				outLog.Printf("Switched to %s (%d tokens, threshold %d)\n", arg, services.ContextWindowForModel(arg), rt.Engine.CompactionThreshold())
+			}
 			continue
 		}
 
@@ -197,10 +260,11 @@ func RunREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOp
 		err := rt.HandleLine(sessionCtx, line)
 		queryRunning.Store(false)
 		if err != nil && sessionCtx.Err() == nil {
+			diagLog.Error("handle line", "error", err)
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		}
 		if sessionCtx.Err() != nil {
-			fmt.Println("Exiting.")
+			outLog.Println("Exiting.")
 			break
 		}
 	}
@@ -211,12 +275,17 @@ func RunREPL(ctx context.Context, settings *config.Settings, rtOpts ...RuntimeOp
 	return nil
 }
 
-func printHelp() {
-	fmt.Println("Commands:")
-	fmt.Println("  /clear   Clear conversation history")
-	fmt.Println("  /cost    Show token usage")
-	fmt.Println("  /help    Show this help")
-	fmt.Println("  /exit    Exit the REPL")
+func printHelp(out logger.Logger) {
+	if out == nil {
+		out = logger.New(os.Stdout, logger.LevelInfo)
+	}
+	out.Println("Commands:")
+	out.Println("  /clear          Clear conversation history")
+	out.Println("  /cost           Show token usage")
+	out.Println("  /model [id]     Switch model (picker if no id)")
+	out.Println("  /models         List available models")
+	out.Println("  /help           Show this help")
+	out.Println("  /exit           Exit the REPL")
 }
 
 // RunJSONLinesMode runs a full JSON-Lines protocol session for TUI/IDE/remote.
@@ -304,6 +373,35 @@ func RunJSONLinesMode(ctx context.Context, settings *config.Settings, rtOpts ...
 					kind = engine.SubmissionFollowUp
 				}
 				dispatchSubmission(kind, req.Line)
+			case protocol.FRListModels:
+				models := services.ListKnownModels()
+				emit(&protocol.BackendEvent{
+					Type:  protocol.BEModelsList,
+					Extra: map[string]any{"models": models, "current": rt.Settings.Model},
+				})
+			case protocol.FRSetModel:
+				model := req.Model
+				if model == "" {
+					model = req.Line
+				}
+				persist := req.Persist != nil && *req.Persist
+				if model == "" {
+					emit(&protocol.BackendEvent{Type: protocol.BEError, Error: "set_model: missing model"})
+					continue
+				}
+				if !services.IsKnownModel(model) {
+					// Still allow, but frontend picker would have filtered; warn via error extra?
+				}
+				if err := rt.SwitchModel(model, persist); err != nil {
+					emit(&protocol.BackendEvent{Type: protocol.BEError, Error: err.Error()})
+				} else {
+					emit(&protocol.BackendEvent{Type: protocol.BESetModel, Text: model, Extra: map[string]any{"persisted": persist}})
+					st := rt.AppState.Get()
+					emit(&protocol.BackendEvent{
+						Type:  protocol.BEStateSnapshot,
+						Extra: map[string]any{"model": st.Model, "provider": st.Provider, "base_url": st.BaseURL, "auth_status": st.AuthStatus},
+					})
+				}
 			case protocol.FRShutdown:
 				return nil
 			}

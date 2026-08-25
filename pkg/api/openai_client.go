@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/types"
 )
 
@@ -71,8 +71,8 @@ func (c *OpenAIApiClient) StreamMessage(ctx context.Context, req *ApiMessageRequ
 			if ae, ok := err.(*apiHTTPError); ok {
 				statusStr = strconv.Itoa(ae.StatusCode)
 			}
-			log.Printf("OpenAI API request failed (attempt %d/%d, status=%s), retrying in %.1fs: %v",
-				attempt+1, MaxRetries+1, statusStr, delay.Seconds(), err)
+			logger.Default().Warn("OpenAI API request failed, retrying",
+				"attempt", attempt+1, "max", MaxRetries+1, "status", statusStr, "delay", delay.String(), "error", err.Error())
 			select {
 			case <-ctx.Done():
 				sendError(events, ctx.Err())
@@ -279,7 +279,9 @@ func (c *OpenAIApiClient) streamOnce(
 		return fmt.Errorf("create http request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := c.client.Do(httpReq)
@@ -319,7 +321,7 @@ func (c *OpenAIApiClient) streamOnce(
 			if len(sample) > 500 {
 				sample = sample[:500] + "..."
 			}
-			log.Printf("[openharness debug:sse] %s", sample)
+			logger.Default().Debug("[openharness debug:sse]", "sample", sample)
 		}
 
 		var chunk openaiStreamChunk

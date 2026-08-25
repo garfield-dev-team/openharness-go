@@ -3,14 +3,13 @@ package ui_test
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/openharness/openharness/pkg/config"
+	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/ui"
 )
 
@@ -64,7 +63,9 @@ func TestHandleLineRendersAssistantText(t *testing.T) {
 		MaxTokens: 64,
 	}
 
-	rt, err := ui.BuildRuntime(settings, t.TempDir())
+	var buf bytes.Buffer
+	lg := logger.New(&buf, logger.LevelInfo)
+	rt, err := ui.BuildRuntime(settings, t.TempDir(), ui.WithLogger(lg))
 	if err != nil {
 		t.Fatalf("build runtime: %v", err)
 	}
@@ -74,13 +75,11 @@ func TestHandleLineRendersAssistantText(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	out := captureStdout(t, func() {
-		if err := rt.HandleLine(context.Background(), "hi"); err != nil {
-			t.Errorf("handle line: %v", err)
-		}
-	})
-	if !strings.Contains(out, "Hello there") {
-		t.Fatalf("assistant text not rendered, got: %q", out)
+	if err := rt.HandleLine(context.Background(), "hi"); err != nil {
+		t.Errorf("handle line: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Hello there") {
+		t.Fatalf("assistant text not rendered, got: %q", buf.String())
 	}
 }
 
@@ -105,7 +104,9 @@ func TestHandleLineReasoningOnlyReplyIsVisible(t *testing.T) {
 		BaseURL:   &baseURL,
 		MaxTokens: 64,
 	}
-	rt, err := ui.BuildRuntime(settings, t.TempDir())
+	var buf bytes.Buffer
+	lg := logger.New(&buf, logger.LevelInfo)
+	rt, err := ui.BuildRuntime(settings, t.TempDir(), ui.WithLogger(lg))
 	if err != nil {
 		t.Fatalf("build runtime: %v", err)
 	}
@@ -114,13 +115,11 @@ func TestHandleLineReasoningOnlyReplyIsVisible(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	out := captureStdout(t, func() {
-		if err := rt.HandleLine(context.Background(), "hi"); err != nil {
-			t.Errorf("handle line: %v", err)
-		}
-	})
-	if !strings.Contains(ansiStrip(out), "thinking hard") {
-		t.Fatalf("reasoning content not rendered, got: %q", out)
+	if err := rt.HandleLine(context.Background(), "hi"); err != nil {
+		t.Errorf("handle line: %v", err)
+	}
+	if !strings.Contains(ansiStrip(buf.String()), "thinking hard") {
+		t.Fatalf("reasoning content not rendered, got: %q", buf.String())
 	}
 }
 
@@ -169,7 +168,9 @@ func TestHandleLineOpenRouterReasoningFieldIsVisible(t *testing.T) {
 		BaseURL:   &baseURL,
 		MaxTokens: 64,
 	}
-	rt, err := ui.BuildRuntime(settings, t.TempDir())
+	var buf bytes.Buffer
+	lg := logger.New(&buf, logger.LevelInfo)
+	rt, err := ui.BuildRuntime(settings, t.TempDir(), ui.WithLogger(lg))
 	if err != nil {
 		t.Fatalf("build runtime: %v", err)
 	}
@@ -178,12 +179,10 @@ func TestHandleLineOpenRouterReasoningFieldIsVisible(t *testing.T) {
 		t.Fatalf("start: %v", err)
 	}
 
-	out := captureStdout(t, func() {
-		if err := rt.HandleLine(context.Background(), "hi"); err != nil {
-			t.Errorf("handle line: %v", err)
-		}
-	})
-	visible := ansiStrip(out)
+	if err := rt.HandleLine(context.Background(), "hi"); err != nil {
+		t.Errorf("handle line: %v", err)
+	}
+	visible := ansiStrip(buf.String())
 	if !strings.Contains(visible, "pondering") {
 		t.Fatalf("delta.reasoning content not rendered, got: %q", visible)
 	}
@@ -220,26 +219,4 @@ func TestHandleLineSurfacesAPIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("API error was swallowed — HandleLine returned nil")
 	}
-}
-// captureStdout swaps os.Stdout with a pipe for the duration of fn.
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	orig := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	os.Stdout = w
-	done := make(chan string)
-	go func() {
-		var buf bytes.Buffer
-		_, _ = io.Copy(&buf, r)
-		done <- buf.String()
-	}()
-	fn()
-	os.Stdout = orig
-	_ = w.Close()
-	out := <-done
-	_ = r.Close()
-	return out
 }

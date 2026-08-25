@@ -143,6 +143,7 @@ type QueryContext struct {
 	MaxTokens         int
 	MaxTurns          int
 	HookExecutor      HookExecutor
+	CompactionConfig  *services.CompactionConfig
 
 	AskUser       tools.AskUserFunc
 	AskPermission tools.AskPermissionFunc
@@ -182,9 +183,14 @@ func RunQuery(ctx context.Context, qctx *QueryContext, messages *[]types.Convers
 			// L1/L2 inline fast compaction within the turn loop
 			// If we generated massive tool results in previous turns, compress them
 			// before sending the next request to prevent token blowout mid-loop.
-			config := services.DefaultCompactionConfig()
-			if services.ShouldCompact(*messages, config) {
-				services.RunPipeline(ctx, *messages, config, nil, nil) // no summarizeFn, so only L1-L4 executes
+			cfg := qctx.CompactionConfig
+			if cfg == nil {
+				cfg = services.ResolveCompactionConfig(qctx.Model, 0, 0)
+			}
+			if services.ShouldCompact(*messages, cfg) {
+				if compacted, err := services.RunPipeline(ctx, *messages, cfg, nil, nil); err == nil {
+					*messages = compacted
+				}
 			}
 
 			params := LLMRequestParams{

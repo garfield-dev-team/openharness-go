@@ -32,10 +32,12 @@ type preset struct {
 	baseURL  string // "" = ask (custom) or not applicable (Anthropic direct)
 	model    string
 	askURL   bool // custom entry prompts for the base URL
+	noAPIKey bool // when true, no key is required (e.g. OpenCode Zen free tier)
 }
 
 // providerPresets is the menu shown by the wizard. Order is display order.
 var providerPresets = []preset{
+	{name: "opencode", label: "OpenCode Zen (free, no API key)", provider: "opencode", baseURL: "https://opencode.ai/zen/v1", model: "muse-spark-1.2-contributor-free", noAPIKey: true},
 	{name: "anthropic", label: "Anthropic (direct)", model: "claude-sonnet-4-20250514"},
 	{name: "openai", label: "OpenAI", provider: "openai-compatible", baseURL: "https://api.openai.com/v1", model: "gpt-4o"},
 	{name: "openrouter", label: "OpenRouter", provider: "openai-compatible", baseURL: "https://openrouter.ai/api/v1", model: "anthropic/claude-sonnet-4"},
@@ -105,8 +107,12 @@ func Run(settings *config.Settings, opts Options) error {
 	}
 
 	for attempt := 1; ; attempt++ {
-		key := askString(opts, "API key", "")
-		settings.APIKey = key
+		if p.noAPIKey {
+			settings.APIKey = ""
+		} else {
+			key := askString(opts, "API key", "")
+			settings.APIKey = key
+		}
 
 		model := askString(opts, "Model", p.model)
 		settings.Model = model
@@ -247,8 +253,10 @@ func buildClient(settings *config.Settings) api.MessageStreamer {
 		baseURL = *settings.BaseURL
 	}
 	key, _ := settings.ResolveAPIKey()
-	if api.DetectProvider(*settings).Name == "openai-compatible" {
+	switch api.DetectProvider(*settings).Name {
+	case "openai-compatible", "opencode":
 		return api.NewOpenAIApiClient(key, baseURL)
+	default:
+		return api.NewAnthropicApiClient(key, baseURL)
 	}
-	return api.NewAnthropicApiClient(key, baseURL)
 }

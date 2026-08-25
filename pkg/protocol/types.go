@@ -38,6 +38,9 @@ const (
 	// HITL events – require a frontend response to unblock the engine.
 	BEModalRequest  BackendEventType = "modal_request"
 	BESelectRequest BackendEventType = "select_request"
+
+	BEModelsList BackendEventType = "models_list"
+	BESetModel   BackendEventType = "set_model"
 )
 
 type ModalKind string
@@ -88,6 +91,8 @@ const (
 	FRQuestionResponse   FrontendRequestType = "question_response"
 	FRPermissionResponse FrontendRequestType = "permission_response"
 	FRListSessions       FrontendRequestType = "list_sessions"
+	FRListModels         FrontendRequestType = "list_models"
+	FRSetModel           FrontendRequestType = "set_model"
 	FRShutdown           FrontendRequestType = "shutdown"
 )
 
@@ -98,6 +103,8 @@ type FrontendRequest struct {
 	Kind      string              `json:"kind,omitempty"` // queue_message delivery kind
 	Answer    string              `json:"answer,omitempty"`
 	Allowed   *bool               `json:"allowed,omitempty"`
+	Model     string              `json:"model,omitempty"`
+	Persist   *bool               `json:"persist,omitempty"`
 }
 
 func ParseFrontendRequest(data []byte) (*FrontendRequest, error) {

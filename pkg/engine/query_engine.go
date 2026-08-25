@@ -96,6 +96,7 @@ type QueryEngine struct {
 	askUser           tools.AskUserFunc
 	askPermission     tools.AskPermissionFunc
 	store             *session.Store
+	compactionConfig  *services.CompactionConfig
 
 	Messages       []types.ConversationMessage
 	collapseBuffer []types.ConversationMessage
@@ -145,6 +146,20 @@ func WithSessionStore(store *session.Store) QueryEngineOption {
 	return func(qe *QueryEngine) { qe.store = store }
 }
 
+// WithCompactionConfig overrides the compaction config (threshold, snip
+// budgets, etc.). When nil, a model-aware default is resolved on demand.
+func WithCompactionConfig(cfg *services.CompactionConfig) QueryEngineOption {
+	return func(qe *QueryEngine) { qe.compactionConfig = cfg }
+}
+
+// SetCompactionConfig replaces the compaction config at runtime (e.g. after
+// a model switch).
+func (qe *QueryEngine) SetCompactionConfig(cfg *services.CompactionConfig) {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	qe.compactionConfig = cfg
+}
+
 // NewQueryEngine creates a QueryEngine with the given required dependencies.
 func NewQueryEngine(
 	apiClient StreamingLLMClient,
@@ -165,6 +180,7 @@ func NewQueryEngine(
 		maxTokens:         maxTokens,
 		maxTurns:          100,
 		baseCtx:           context.Background(),
+		compactionConfig:  services.ResolveCompactionConfig(model, 0, 0),
 	}
 	for _, o := range opts {
 		o(qe)
@@ -323,7 +339,10 @@ func (qe *QueryEngine) executeRun(ctx context.Context, qs queuedSubmission) {
 		return summary.String(), nil
 	}
 
-	config := services.DefaultCompactionConfig()
+	config := qe.compactionConfig
+	if config == nil {
+		config = services.ResolveCompactionConfig(qe.model, 0, 0)
+	}
 	compactedMsgs, err := services.RunPipeline(ctx, msgs, config, &collapseBufferCopy, summarizeFn)
 	if err == nil {
 		msgs = compactedMsgs
@@ -332,6 +351,10 @@ func (qe *QueryEngine) executeRun(ctx context.Context, qs queuedSubmission) {
 		qe.mu.Unlock()
 	}
 
+	compCfg := qe.compactionConfig
+	if compCfg == nil {
+		compCfg = services.ResolveCompactionConfig(qe.model, 0, 0)
+	}
 	qctx := &QueryContext{
 		APIClient:         qe.apiClient,
 		ToolRegistry:      qe.toolRegistry,
@@ -342,6 +365,7 @@ func (qe *QueryEngine) executeRun(ctx context.Context, qs queuedSubmission) {
 		MaxTokens:         qe.maxTokens,
 		MaxTurns:          qe.maxTurns,
 		HookExecutor:      qe.hookExecutor,
+		CompactionConfig:  compCfg,
 		AskUser:           qe.askUser,
 		AskPermission:     qe.askPermission,
 		OnMessageAppended: qe.persist,
@@ -455,4 +479,14 @@ func (qe *QueryEngine) CurrentTokens() int {
 	qe.mu.Lock()
 	defer qe.mu.Unlock()
 	return services.EstimateMessageTokens(qe.Messages)
+}
+
+// CompactionThreshold returns the token threshold at which compaction triggers.
+func (qe *QueryEngine) CompactionThreshold() int {
+	qe.mu.Lock()
+	defer qe.mu.Unlock()
+	if qe.compactionConfig != nil {
+		return qe.compactionConfig.TokenThreshold
+	}
+	return services.ThresholdForModel(qe.model)
 }

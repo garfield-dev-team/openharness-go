@@ -5,12 +5,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/openharness/openharness/pkg/api"
 	"github.com/openharness/openharness/pkg/config"
 	"github.com/openharness/openharness/pkg/engine"
 	"github.com/openharness/openharness/pkg/hooks"
+	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/mcp"
 	"github.com/openharness/openharness/pkg/memory"
 	"github.com/openharness/openharness/pkg/prompts"
@@ -34,6 +36,11 @@ type RuntimeBundle struct {
 	Store        *session.Store
 	SessionID    string
 	Cwd          string
+	Logger       logger.Logger
+	Settings     *config.Settings
+
+	adapter          *apiClientAdapter
+	subAgentExecutor *tasks.SubAgentExecutor
 }
 
 type RuntimeOption func(*runtimeConfig)
@@ -43,6 +50,7 @@ type runtimeConfig struct {
 	askPermission tools.AskPermissionFunc
 	resumeID      string
 	continueLast  bool
+	output        logger.Logger
 }
 
 func WithHITLCallbacks(askUser tools.AskUserFunc, askPermission tools.AskPermissionFunc) RuntimeOption {
@@ -61,6 +69,12 @@ func WithResumeSession(id string) RuntimeOption {
 // WithContinueLastSession resumes the most recently modified session.
 func WithContinueLastSession() RuntimeOption {
 	return func(cfg *runtimeConfig) { cfg.continueLast = true }
+}
+
+// WithLogger overrides the terminal output destination. When nil, BuildRuntime
+// creates a Logger writing to os.Stdout at a level derived from settings.Verbose.
+func WithLogger(l logger.Logger) RuntimeOption {
+	return func(cfg *runtimeConfig) { cfg.output = l }
 }
 
 // BuildRuntime assembles a RuntimeBundle from settings and cwd.
@@ -83,9 +97,10 @@ func BuildRuntime(settings *config.Settings, cwd string, opts ...RuntimeOption) 
 	providerInfo := api.DetectProvider(*settings)
 
 	var apiClient api.MessageStreamer
-	if providerInfo.Name == "openai-compatible" {
+	switch providerInfo.Name {
+	case "openai-compatible", "opencode":
 		apiClient = api.NewOpenAIApiClient(apiKey, baseURL)
-	} else {
+	default:
 		apiClient = api.NewAnthropicApiClient(apiKey, baseURL)
 	}
 
@@ -181,6 +196,8 @@ func BuildRuntime(settings *config.Settings, cwd string, opts ...RuntimeOption) 
 	if cfg.askPermission != nil {
 		engineOpts = append(engineOpts, engine.WithAskPermission(cfg.askPermission))
 	}
+	compactionCfg := services.ResolveCompactionConfig(settings.Model, settings.ContextWindow, settings.CompactionThreshold)
+	engineOpts = append(engineOpts, engine.WithCompactionConfig(compactionCfg))
 
 	// Resolve the durable session tree: resume an existing file, continue
 	// the most recent one, or start a fresh session under .openharness/sessions.
@@ -220,17 +237,97 @@ func BuildRuntime(settings *config.Settings, cwd string, opts ...RuntimeOption) 
 		qe.LoadMessages(sess.ActiveMessages())
 	}
 
+	outLogger := cfg.output
+	if outLogger == nil {
+		outLogger = logger.New(os.Stdout, logger.LevelFromVerbose(settings.Verbose))
+	}
+	// Diagnostic logs (retries, SSE debug) go to stderr via the global logger.
+	logger.SetDefault(logger.New(os.Stderr, logger.LevelFromVerbose(settings.Verbose)))
+
 	return &RuntimeBundle{
-		APIClient:    apiClient,
-		MCPManager:   mcpMgr,
-		ToolRegistry: toolReg,
-		AppState:     appState,
-		HookExecutor: hookExec,
-		Engine:       qe,
-		Store:        sess,
-		SessionID:    sessionID,
-		Cwd:          cwd,
+		APIClient:        apiClient,
+		MCPManager:       mcpMgr,
+		ToolRegistry:     toolReg,
+		AppState:         appState,
+		HookExecutor:     hookExec,
+		Engine:           qe,
+		Store:            sess,
+		SessionID:        sessionID,
+		Cwd:              cwd,
+		Logger:           outLogger,
+		Settings:         settings,
+		adapter:          adapter,
+		subAgentExecutor: subAgentExecutor,
 	}, nil
+}
+
+// SwitchModel updates the active model (and associated provider/baseURL,
+// compaction threshold, and sub-agent) without restarting the session.
+// When persist is true the new model is written to the settings file.
+func (r *RuntimeBundle) SwitchModel(newModel string, persist bool) error {
+	newModel = strings.TrimSpace(newModel)
+	if newModel == "" {
+		return fmt.Errorf("model must not be empty")
+	}
+	lower := strings.ToLower(newModel)
+	// Auto-provider for the free OpenCode tier.
+	if strings.HasPrefix(lower, "muse-spark") {
+		r.Settings.Provider = "opencode"
+		base := "https://opencode.ai/zen/v1"
+		r.Settings.BaseURL = &base
+	} else if r.Settings.Provider == "opencode" {
+		// Leaving the opencode realm — clear the free-tier wiring.
+		r.Settings.Provider = ""
+		r.Settings.BaseURL = nil
+	}
+	r.Settings.Model = newModel
+
+	// Validate auth (opencode is exempt).
+	if _, err := r.Settings.ResolveAPIKey(); err != nil {
+		return err
+	}
+
+	// Recreate the API client if provider/base changed.
+	providerInfo := api.DetectProvider(*r.Settings)
+	baseURL := ""
+	if r.Settings.BaseURL != nil {
+		baseURL = *r.Settings.BaseURL
+	}
+	apiKey, _ := r.Settings.ResolveAPIKey()
+	var newClient api.MessageStreamer
+	switch providerInfo.Name {
+	case "openai-compatible", "opencode":
+		newClient = api.NewOpenAIApiClient(apiKey, baseURL)
+	default:
+		newClient = api.NewAnthropicApiClient(apiKey, baseURL)
+	}
+	r.APIClient = newClient
+	if r.adapter != nil {
+		r.adapter.client = newClient
+	}
+	if r.subAgentExecutor != nil {
+		r.subAgentExecutor.Model = newModel
+		r.subAgentExecutor.APIClient = r.adapter
+	}
+
+	// Engine model + compaction (model-aware threshold).
+	r.Engine.SetModel(newModel)
+	r.Engine.SetCompactionConfig(services.ResolveCompactionConfig(newModel, r.Settings.ContextWindow, r.Settings.CompactionThreshold))
+
+	// AppState for TUI header.
+	r.AppState.Update(func(s *state.AppState) {
+		s.Model = newModel
+		s.Provider = providerInfo.Name
+		s.BaseURL = baseURL
+		s.AuthStatus = api.AuthStatus(*r.Settings)
+	})
+
+	if persist {
+		if err := config.SaveSettings(*r.Settings); err != nil {
+			return fmt.Errorf("save settings: %w", err)
+		}
+	}
+	return nil
 }
 
 // Start connects MCP servers and performs other async initialisation.
@@ -263,11 +360,15 @@ func (r *RuntimeBundle) Close() error {
 // HandleLine processes a single user input line through the engine.
 func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 	ch := r.Engine.SubmitMessage(ctx, line)
-	
+
+	out := r.Logger
+	if out == nil {
+		out = logger.New(os.Stdout, logger.LevelInfo)
+	}
 	isThinking := false
 	clearThinking := func() {
 		if isThinking {
-			fmt.Print("\033[2K\r") // Clear the entire line and return to start
+			out.Print("\033[2K\r") // Clear the entire line and return to start
 			isThinking = false
 		}
 	}
@@ -280,20 +381,20 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 		}
 		switch ev.Event.Type {
 		case engine.EventModelTurnStarted:
-			fmt.Print("\033[90m⏳ Thinking...\033[0m")
+			out.Print("\033[90m⏳ Thinking...\033[0m")
 			isThinking = true
 		case engine.EventAborted:
 			clearThinking()
-			fmt.Println("\n\033[33m⏹ Aborted (session preserved)\033[0m")
+			out.Println("\n\033[33m⏹ Aborted (session preserved)\033[0m")
 		case engine.EventTextDelta:
 			clearThinking()
 			rendered = true
-			fmt.Print(ev.Event.Text)
+			out.Print(ev.Event.Text)
 		case engine.EventReasoningDelta:
 			clearThinking()
 			rendered = true
 			// 90 is dark gray: keep reasoning visible but visually subordinate.
-			fmt.Print("\033[90m" + ev.Event.Text + "\033[0m")
+			out.Print("\033[90m" + ev.Event.Text + "\033[0m")
 		case engine.EventToolExecutionStarted:
 			clearThinking()
 			rendered = true
@@ -302,29 +403,29 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 				argsStr = argsStr[:200] + "..."
 			}
 			// ANSI colors: 90 is dark gray (dim), 33 is yellow
-			fmt.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
+			out.Printf("\n\033[90m▶ \033[33m%s\033[90m(%s)\033[0m\n", ev.Event.ToolName, argsStr)
 		case engine.EventToolExecutionCompleted:
 			clearThinking()
 			if ev.Event.ToolResult != nil && ev.Event.ToolResult.IsError {
 				// 31 is red
-				fmt.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
+				out.Printf("\033[90m✖ \033[31m%s\033[90m failed\033[0m\n", ev.Event.ToolName)
 			} else {
 				// 32 is green
-				fmt.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
+				out.Printf("\033[90m✔ \033[32m%s\033[90m completed\033[0m\n", ev.Event.ToolName)
 			}
 		case engine.EventAssistantTurnComplete:
 			clearThinking()
 			// Optionally print a newline or separator
 		}
 	}
-	fmt.Println()
+	out.Println()
 
 	if !rendered {
-		fmt.Println("\033[33m⚠ Model returned no visible content (reasoning-only or empty response).\033[0m")
+		out.Println("\033[33m⚠ Model returned no visible content (reasoning-only or empty response).\033[0m")
 	}
 
 	currentTokens := r.Engine.CurrentTokens()
-	threshold := services.DefaultCompactionConfig().TokenThreshold
+	threshold := r.Engine.CompactionThreshold()
 	pct := float64(currentTokens) / float64(threshold) * 100
 
 	color := "\033[32m" // green
@@ -334,7 +435,7 @@ func (r *RuntimeBundle) HandleLine(ctx context.Context, line string) error {
 		color = "\033[33m" // yellow
 	}
 
-	fmt.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
+	out.Printf("\n\033[90m[🧠 Brain Capacity] %s%.1f%%\033[90m (%d / %d tokens)\033[0m\n", color, pct, currentTokens, threshold)
 
 	return nil
 }
