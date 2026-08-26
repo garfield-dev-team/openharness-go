@@ -14,6 +14,7 @@ import (
 	"github.com/openharness/openharness/pkg/engine"
 	"github.com/openharness/openharness/pkg/logger"
 	"github.com/openharness/openharness/pkg/services"
+	"github.com/openharness/openharness/pkg/tools"
 )
 
 func tuiTestRuntime(t *testing.T) (*RuntimeBundle, tuiModel) {
@@ -39,6 +40,20 @@ func engineReasoningEvent(text string) engine.StreamEventWithUsage {
 
 func engineToolStartEvent(name, input string) engine.StreamEventWithUsage {
 	return engine.StreamEventWithUsage{Event: engine.StreamEvent{Type: engine.EventToolExecutionStarted, ToolName: name, ToolInput: []byte(input)}}
+}
+
+func engineToolDoneEvent(name string) engine.StreamEventWithUsage {
+	return engine.StreamEventWithUsage{Event: engine.StreamEvent{
+		Type: engine.EventToolExecutionCompleted, ToolName: name,
+		ToolResult: &tools.ToolResult{IsError: false},
+	}}
+}
+
+func engineToolFailEvent(name string) engine.StreamEventWithUsage {
+	return engine.StreamEventWithUsage{Event: engine.StreamEvent{
+		Type: engine.EventToolExecutionCompleted, ToolName: name,
+		ToolResult: &tools.ToolResult{IsError: true},
+	}}
 }
 
 func keyMsg(ty tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: ty} }
@@ -121,9 +136,10 @@ func TestStreamEventsRenderAndFlush(t *testing.T) {
 	if !strings.Contains(mm.viewTranscript(), "hello world") {
 		t.Fatalf("text lost after flush: %q", mm.viewTranscript())
 	}
-	// Body text must be white-styled; no per-message token footer (header owns that).
-	if !strings.Contains(mm.viewTranscript(), tuiTextStyle.Render("hello world")) {
-		t.Fatalf("assistant body not rendered in white: %q", mm.viewTranscript())
+	// Body text must be framed by the accent-bar block style; no per-message
+	// token footer (header owns that).
+	if !strings.Contains(mm.viewTranscript(), tuiTextBlock.Render("hello world")) {
+		t.Fatalf("assistant body not rendered with block styling: %q", mm.viewTranscript())
 	}
 	if strings.Contains(mm.viewTranscript(), "[🧠") {
 		t.Fatal("per-message token footer must not be duplicated in transcript")
@@ -179,8 +195,123 @@ func TestReasoningThenToolFlushOrder(t *testing.T) {
 	upd, _ = upd.(*tuiModel).Update(streamEventMsg{ev: engineToolStartEvent("Read", `{"path":"a.go"}`)})
 	mm := upd.(*tuiModel)
 	out := stripANSI(mm.viewTranscript())
-	if !strings.Contains(out, "pondering") || !strings.Contains(out, "▶ Read") {
+	if !strings.Contains(out, "pondering") || !strings.Contains(out, "◇ Read") {
 		t.Fatalf("reasoning/tool rendering broken: %q", out)
+	}
+}
+
+// A running tool line (◇) is replaced in place by ✔/✖ on completion —
+// no duplicate rows pile up in the transcript.
+func TestToolLineReplacedOnCompletion(t *testing.T) {
+	_, m := tuiTestRuntime(t)
+	m.busy = true
+	upd, _ := m.Update(streamEventMsg{ev: engineToolStartEvent("Read", `{"path":"a.go","limit":10}`)})
+	mm := upd.(*tuiModel)
+	if len(mm.openTools) != 1 {
+		t.Fatalf("expected 1 open tool, got %d", len(mm.openTools))
+	}
+	if got := stripANSI(mm.viewTranscript()); !strings.Contains(got, "◇ Read limit=10 path=a.go") {
+		t.Fatalf("running tool line malformed: %q", got)
+	}
+	upd, _ = mm.Update(streamEventMsg{ev: engineToolDoneEvent("Read")})
+	mm = upd.(*tuiModel)
+	out := stripANSI(mm.viewTranscript())
+	if strings.Contains(out, "◇ Read") || len(mm.openTools) != 0 {
+		t.Fatalf("running tool not finalized in place: %q open=%v", out, mm.openTools)
+	}
+	if !strings.Contains(out, "✔ Read") {
+		t.Fatalf("completion marker missing: %q", out)
+	}
+	if strings.Contains(out, "completed") {
+		t.Fatalf("legacy 'completed' suffix leaked: %q", out)
+	}
+	// Failed run renders the ✖ variant.
+	upd, _ = mm.Update(streamEventMsg{ev: engineToolStartEvent("Bash", `{"cmd":"ls"}`)})
+	mm = upd.(*tuiModel)
+	upd, _ = mm.Update(streamEventMsg{ev: engineToolFailEvent("Bash")})
+	mm = upd.(*tuiModel)
+	if out := stripANSI(mm.viewTranscript()); !strings.Contains(out, "✖ Bash failed") {
+		t.Fatalf("failure marker missing: %q", out)
+	}
+}
+
+// While a query is in flight but nothing has streamed yet (TTFT window),
+// the view shows an animated Thinking row; it disappears on first token.
+func TestAwaitingFirstTokenShowsThinkingRow(t *testing.T) {
+	_, m := tuiTestRuntime(t)
+	m.busy = true
+	m.awaitingFirst = true
+	if !strings.Contains(m.View(), "Thinking…") {
+		t.Fatal("thinking row missing during TTFT")
+	}
+	upd, _ := m.Update(streamEventMsg{ev: engineTextEvent("hi")})
+	mm := upd.(*tuiModel)
+	if mm.awaitingFirst {
+		t.Fatal("first token must clear awaitingFirst")
+	}
+	if strings.Contains(mm.View(), "Thinking…") {
+		t.Fatal("thinking row must disappear once tokens stream")
+	}
+}
+
+// Typing "/" opens the command menu; arrow keys move the highlight and
+// enter runs the highlighted command.
+func TestSlashMenuNavigationAndRun(t *testing.T) {
+	_, m := tuiTestRuntime(t)
+	upd, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}})
+	mm := upd.(*tuiModel)
+	if len(mm.slashMatches()) == 0 {
+		t.Fatal("menu should list all commands for / prefix")
+	}
+	if !strings.Contains(mm.View(), "compact conversation context now") {
+		t.Fatal("menu should render command descriptions")
+	}
+	// Down three times lands on /model (after /clear, /compact, /cost).
+	upd, _ = mm.Update(keyMsg(tea.KeyDown))
+	mm = upd.(*tuiModel)
+	if mm.slashIdx != 1 {
+		t.Fatalf("slashIdx = %d, want 1", mm.slashIdx)
+	}
+	upd, _ = mm.Update(keyMsg(tea.KeyDown))
+	mm = upd.(*tuiModel)
+	upd, _ = mm.Update(keyMsg(tea.KeyDown))
+	mm = upd.(*tuiModel)
+	if got := mm.slashMatches()[mm.slashIdx].cmd; got != "/model" {
+		t.Fatalf("highlighted %q, want /model", got)
+	}
+	// Enter runs the highlighted command → opens the model picker.
+	upd, _ = mm.Update(keyMsg(tea.KeyEnter))
+	mm = upd.(*tuiModel)
+	if mm.mode != modeModelPicker {
+		t.Fatalf("enter should run highlighted command, mode=%d", mm.mode)
+	}
+}
+
+func TestCompactCommandRunsPipeline(t *testing.T) {
+	rt, m := tuiTestRuntime(t)
+	cmd := m.dispatch("/compact")
+	if cmd == nil {
+		t.Fatal("/compact must schedule a compaction run")
+	}
+	if !m.busy {
+		t.Fatal("/compact should mark the UI busy")
+	}
+	msg := cmd()
+	done, ok := msg.(compactDoneMsg)
+	if !ok {
+		t.Fatalf("expected compactDoneMsg, got %#v", msg)
+	}
+	if done.err != nil {
+		t.Fatalf("compact failed: %v", done.err)
+	}
+	if rt.Engine.CurrentTokens() > done.before {
+		t.Fatalf("history grew after compact: %d > %d", rt.Engine.CurrentTokens(), done.before)
+	}
+	// Result line lands in the transcript once the message is processed.
+	upd, _ := m.Update(done)
+	out := stripANSI(upd.(*tuiModel).viewTranscript())
+	if !strings.Contains(out, "Compacted:") {
+		t.Fatalf("transcript missing compaction summary: %q", out)
 	}
 }
 

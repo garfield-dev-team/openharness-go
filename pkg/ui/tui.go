@@ -2,7 +2,9 @@ package ui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -19,17 +21,29 @@ var (
 	tuiTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
 	tuiDimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	tuiUserStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	tuiTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")) // bright white: assistant body
+	tuiTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")) // assistant body text
+	// tuiTextBlock frames assistant body with a cyan left bar so prose is
+	// visually distinct from dim reasoning and orange tool lines.
+	tuiTextBlock = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(lipgloss.Color("39")).
+			PaddingLeft(1)
 	tuiReasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	tuiToolStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	tuiOkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	tuiErrStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	tuiWarnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	tuiToolStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // running tool line
+	// Tool lines render in place: ◇ name args… while running, then the
+	// same row flips to ✔ (green) or ✖ (red) on completion.
+	tuiToolNameStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	tuiOkStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	tuiErrStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	tuiWarnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 )
 
-// slashCommands drives both autocomplete suggestions and dispatch.
-var slashCommands = []struct{ cmd, desc string }{
+// slashCmd drives both the autocomplete menu and dispatch.
+type slashCmd struct{ cmd, desc string }
+
+var slashCommands = []slashCmd{
 	{"/clear", "clear conversation history"},
+	{"/compact", "compact conversation context now"},
 	{"/cost", "show token usage"},
 	{"/model", "switch model (interactive picker)"},
 	{"/models", "list available models"},
@@ -61,6 +75,12 @@ type hitlPromptMsg struct {
 
 type statusMsg struct{ text string }
 
+// compactDoneMsg reports the result of a manual /compact run.
+type compactDoneMsg struct {
+	before, after int
+	err           error
+}
+
 // tuiModel is the Bubble Tea replacement for the line-based REPL.
 type tuiModel struct {
 	rt  *RuntimeBundle
@@ -76,11 +96,14 @@ type tuiModel struct {
 	curIsReasoning bool
 	busy           bool
 	autoFollow     bool // pinned to bottom; disabled by manual scrolling
+	awaitingFirst  bool // query in flight, no token received yet (TTFT)
+	openTools      []int // indices of running tool lines, replaced on completion
 
-	mode   tuiMode
-	models []services.ModelInfo
-	cursor int
-	hitl   *hitlPromptMsg
+	mode     tuiMode
+	models   []services.ModelInfo
+	cursor   int
+	hitl     *hitlPromptMsg
+	slashIdx int // highlighted row in the slash command menu
 
 	width, height int
 	status        string
@@ -113,7 +136,7 @@ func (m *tuiModel) flushCurrent() {
 	if m.curIsReasoning {
 		m.appendLine(tuiReasonStyle.Render(m.cur.String()))
 	} else {
-		m.appendLine(tuiTextStyle.Render(m.cur.String()))
+		m.appendLine(tuiTextBlock.Render(m.cur.String()))
 	}
 	m.cur.Reset()
 	m.curIsReasoning = false
@@ -174,11 +197,22 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case queryDoneMsg:
 		m.busy = false
+		m.awaitingFirst = false
 		m.flushCurrent()
 		if msg.err != nil {
 			m.appendLine(tuiErrStyle.Render("Error: " + msg.err.Error()))
 		} else if m.lastBlockEmpty() {
 			m.appendLine(tuiWarnStyle.Render("⚠ Model returned no visible content."))
+		}
+		m.refreshTranscript()
+		return m, nil
+
+	case compactDoneMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.appendLine(tuiErrStyle.Render("✖ Compact failed: " + msg.err.Error()))
+		} else {
+			m.appendLine(tuiOkStyle.Render(fmt.Sprintf("✔ Compacted: %d → %d tokens", msg.before, msg.after)))
 		}
 		m.refreshTranscript()
 		return m, nil
@@ -214,29 +248,106 @@ func (m *tuiModel) applyStreamEvent(ev engine.StreamEventWithUsage) {
 	switch e.Type {
 	case engine.EventAborted:
 		m.flushCurrent()
+		m.finalizeAbortedTools()
 		m.appendLine(tuiWarnStyle.Render("⏹ Aborted (session preserved)"))
 	case engine.EventTextDelta:
+		m.awaitingFirst = false
 		m.cur.WriteString(e.Text)
 	case engine.EventReasoningDelta:
+		m.awaitingFirst = false
 		m.curIsReasoning = true
 		m.cur.WriteString(e.Text)
 	case engine.EventToolExecutionStarted:
+		m.awaitingFirst = false
 		m.flushCurrent()
-		args := string(e.ToolInput)
-		if len(args) > 120 {
-			args = args[:120] + "…"
-		}
-		m.appendLine(tuiToolStyle.Render(fmt.Sprintf("▶ %s(%s)", e.ToolName, args)))
+		line := tuiToolStyle.Render("◇ ") + tuiToolNameStyle.Render(e.ToolName) +
+			tuiDimStyle.Render(" "+summarizeToolArgs(e.ToolInput))
+		m.appendLine(line)
+		m.openTools = append(m.openTools, len(m.lines)-1)
 	case engine.EventToolExecutionCompleted:
-		if e.ToolResult != nil && e.ToolResult.IsError {
-			m.appendLine(tuiErrStyle.Render(fmt.Sprintf("✖ %s failed", e.ToolName)))
-		} else {
-			m.appendLine(tuiOkStyle.Render(fmt.Sprintf("✔ %s completed", e.ToolName)))
-		}
+		m.finishToolLine(e)
 	}
 }
 
+// finishToolLine flips the matching running-tool line in place to its
+// final ✔/✖ form instead of appending a new row.
+func (m *tuiModel) finishToolLine(e engine.StreamEvent) {
+	m.flushCurrent()
+	idx := -1
+	for i := len(m.openTools) - 1; i >= 0; i-- {
+		if strings.Contains(stripANSI(m.lines[m.openTools[i]]), e.ToolName) {
+			idx = i
+			break
+		}
+	}
+	var line string
+	if e.ToolResult != nil && e.ToolResult.IsError {
+		line = tuiErrStyle.Render(fmt.Sprintf("✖ %s failed", e.ToolName))
+	} else {
+		line = tuiOkStyle.Render(fmt.Sprintf("✔ %s", e.ToolName))
+	}
+	if idx >= 0 {
+		m.lines[m.openTools[idx]] = line
+		m.openTools = append(m.openTools[:idx], m.openTools[idx+1:]...)
+		return
+	}
+	m.appendLine(line) // completion without a tracked start; keep it visible
+}
+
+// finalizeAbortedTools marks still-running tool lines as interrupted.
+func (m *tuiModel) finalizeAbortedTools() {
+	for _, li := range m.openTools {
+		name := strings.TrimSpace(strings.TrimPrefix(stripANSI(m.lines[li]), "◇"))
+		if i := strings.IndexAny(name, " \t"); i > 0 {
+			name = name[:i]
+		}
+		m.lines[li] = tuiWarnStyle.Render(fmt.Sprintf("⏹ %s interrupted", name))
+	}
+	m.openTools = nil
+}
+
+// summarizeToolArgs renders tool input as sorted key=value pairs so the
+// transcript line stays short and deterministic.
+func summarizeToolArgs(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" || s == "{}" {
+		return ""
+	}
+	var kv map[string]any
+	if err := json.Unmarshal(raw, &kv); err != nil || len(kv) == 0 {
+		return truncateArgs(s)
+	}
+	keys := make([]string, 0, len(kv))
+	for k := range kv {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var parts []string
+	for _, k := range keys {
+		v := kv[k]
+		if str, ok := v.(string); ok {
+			parts = append(parts, fmt.Sprintf("%s=%s", k, str))
+			continue
+		}
+		b, _ := json.Marshal(v)
+		parts = append(parts, fmt.Sprintf("%s=%s", k, b))
+	}
+	return truncateArgs(strings.Join(parts, " "))
+}
+
+func truncateArgs(s string) string {
+	s = strings.TrimSpace(s)
+	const argCap = 72
+	r := []rune(s)
+	if len(r) > argCap {
+		return string(r[:argCap]) + "…"
+	}
+	return s
+}
+
 func (m *tuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
+	matches := m.slashMatches()
+	menuOpen := len(matches) > 0
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.Type {
 		case tea.KeyCtrlC:
@@ -250,14 +361,32 @@ func (m *tuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 			return m, nil
+		case tea.KeyEsc:
+			if menuOpen {
+				m.input.SetValue("")
+				m.syncSuggestions()
+				return m, nil
+			}
 		case tea.KeyEnter:
 			line := strings.TrimSpace(m.input.Value())
+			picked := m.slashIdx
 			m.input.SetValue("")
 			m.input.SetSuggestions(nil)
+			m.slashIdx = 0
+			if menuOpen && matches[picked].cmd != line {
+				// Enter on a highlighted menu row runs that command.
+				return m, m.dispatch(matches[picked].cmd)
+			}
 			if m.mode == modeHitl {
 				return m, m.answerHitl(line)
 			}
 			return m, m.dispatch(line)
+		case tea.KeyTab:
+			if menuOpen {
+				m.input.SetValue(matches[m.slashIdx].cmd)
+				m.syncSuggestions()
+				return m, nil
+			}
 		case tea.KeyPgUp:
 			m.autoFollow = false
 			m.viewport.HalfPageUp()
@@ -269,10 +398,22 @@ func (m *tuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case tea.KeyUp:
+			if menuOpen {
+				if m.slashIdx > 0 {
+					m.slashIdx--
+				}
+				return m, nil
+			}
 			m.autoFollow = false
 			m.viewport.LineUp(1)
 			return m, nil
 		case tea.KeyDown:
+			if menuOpen {
+				if m.slashIdx < len(matches)-1 {
+					m.slashIdx++
+				}
+				return m, nil
+			}
 			m.viewport.LineDown(1)
 			if m.viewport.AtBottom() {
 				m.autoFollow = true
@@ -296,6 +437,7 @@ func (m *tuiModel) updateInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) syncSuggestions() {
 	v := m.input.Value()
+	m.slashIdx = 0
 	if !strings.HasPrefix(v, "/") || strings.Contains(v, " ") {
 		m.input.SetSuggestions(nil)
 		return
@@ -307,6 +449,44 @@ func (m *tuiModel) syncSuggestions() {
 		}
 	}
 	m.input.SetSuggestions(sugg)
+}
+
+// slashMatches lists the commands matching the current "/" input; empty
+// means the menu is closed.
+func (m *tuiModel) slashMatches() []slashCmd {
+	v := m.input.Value()
+	if m.mode != modeInput || !strings.HasPrefix(v, "/") || strings.Contains(v, " ") {
+		return nil
+	}
+	var out []slashCmd
+	for _, c := range slashCommands {
+		if strings.HasPrefix(c.cmd, v) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func (m tuiModel) viewSlashMenu() string {
+	matches := m.slashMatches()
+	if len(matches) == 0 {
+		return ""
+	}
+	if m.slashIdx >= len(matches) {
+		m.slashIdx = len(matches) - 1
+	}
+	var b strings.Builder
+	for i, c := range matches {
+		style := lipgloss.NewStyle()
+		marker := "  "
+		if i == m.slashIdx {
+			style = style.Bold(true).Reverse(true)
+			marker = "› "
+		}
+		b.WriteString(style.Render(fmt.Sprintf("%s%-9s %s", marker, c.cmd, c.desc)) + "\n")
+	}
+	b.WriteString(tuiDimStyle.Render("↑/↓ select · tab complete · enter run · esc dismiss") + "\n")
+	return b.String()
 }
 
 // dispatch routes one submitted line: slash command or agent query.
@@ -322,6 +502,19 @@ func (m *tuiModel) dispatch(line string) tea.Cmd {
 		m.lines = nil
 		m.status = "Conversation cleared."
 		return nil
+	case line == "/compact":
+		if m.busy {
+			m.status = "busy — wait for the current turn"
+			return nil
+		}
+		m.busy = true
+		m.appendLine(tuiDimStyle.Render(fmt.Sprintf("⏳ Compacting (%d tokens)…", m.rt.Engine.CurrentTokens())))
+		m.refreshTranscript()
+		rt, ctx := m.rt, m.ctx
+		return func() tea.Msg {
+			before, after, err := rt.Engine.CompactNow(ctx)
+			return compactDoneMsg{before: before, after: after, err: err}
+		}
 	case line == "/cost":
 		tok := m.rt.Engine.CurrentTokens()
 		th := m.rt.Engine.CompactionThreshold()
@@ -350,6 +543,7 @@ func (m *tuiModel) dispatch(line string) tea.Cmd {
 			return nil
 		}
 		m.busy = true
+		m.awaitingFirst = true
 		m.refreshTranscript()
 		return m.startQuery(line)
 	}
@@ -448,12 +642,20 @@ func (m *tuiModel) View() string {
 	b.WriteString("\n")
 	b.WriteString(m.viewport.View())
 	b.WriteString("\n")
+	// TTFT: nothing streamed yet — show an animated thinking row.
+	if m.busy && m.awaitingFirst && m.cur.Len() == 0 {
+		b.WriteString(tuiTitleStyle.Render(m.spin.View() + " Thinking…"))
+		b.WriteString("\n")
+	}
 	switch {
 	case m.mode == modeModelPicker:
 		b.WriteString(m.viewPicker())
 	case m.mode == modeHitl && m.hitl != nil:
 		b.WriteString(m.viewHitl())
 	default:
+		if menu := m.viewSlashMenu(); menu != "" {
+			b.WriteString(menu)
+		}
 		b.WriteString(m.input.View())
 		b.WriteString("\n")
 		b.WriteString(m.viewFooter())
@@ -494,11 +696,11 @@ func (m tuiModel) viewTranscript() string {
 		b.WriteString("\n")
 	}
 	if m.cur.Len() > 0 {
-		style := tuiTextStyle
 		if m.curIsReasoning {
-			style = tuiReasonStyle
+			b.WriteString(tuiReasonStyle.Render(m.cur.String()))
+		} else {
+			b.WriteString(tuiTextBlock.Render(m.cur.String()))
 		}
-		b.WriteString(style.Render(m.cur.String()))
 	}
 	return b.String()
 }

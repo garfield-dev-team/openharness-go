@@ -16,6 +16,9 @@ type CompactionConfig struct {
 	PreserveRecent     int
 	MaxToolResultChars int
 	SnipMaxChars       int
+	// ForceCompact skips the threshold gates so the pipeline runs to L5
+	// even below TokenThreshold (manual /compact).
+	ForceCompact bool
 }
 
 // DefaultCompactionConfig returns the default configuration.
@@ -93,14 +96,21 @@ func RunPipeline(
 	// L3: Microcompact
 	microcompact(msgs)
 
-	if !ShouldCompact(msgs, config) {
+	gate := func(msgs []types.ConversationMessage) bool {
+		if config.ForceCompact {
+			return true
+		}
+		return ShouldCompact(msgs, config)
+	}
+
+	if !gate(msgs) {
 		return msgs, nil
 	}
 
 	// L4: Context Collapse — drain pre-staged collapsed messages
 	if collapseBuffer != nil && len(*collapseBuffer) > 0 {
 		drainCollapse(msgs, collapseBuffer)
-		if !ShouldCompact(msgs, config) {
+		if !gate(msgs) {
 			return msgs, nil
 		}
 	}
