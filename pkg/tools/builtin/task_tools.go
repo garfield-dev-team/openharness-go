@@ -133,10 +133,10 @@ func (t *TaskListTool) Execute(_ context.Context, _ json.RawMessage, _ *tools.To
 		return tools.NewToolResult("No tasks found."), nil
 	}
 	type summary struct {
-		ID        string             `json:"id"`
-		Status    tasks.TaskStatus   `json:"status"`
-		AgentType string             `json:"agent_type"`
-		Prompt    string             `json:"prompt"`
+		ID        string           `json:"id"`
+		Status    tasks.TaskStatus `json:"status"`
+		AgentType string           `json:"agent_type"`
+		Prompt    string           `json:"prompt"`
 	}
 	summaries := make([]summary, len(entries))
 	for i, e := range entries {

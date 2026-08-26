@@ -772,7 +772,8 @@ stateDiagram-v2
 ## 实施进度
 
 - **一期（§0+§2+§3）已落地**：`pkg/session` 树形存储（append-only JSONL、断尾恢复、NavigateTo/ForkTo/ListIDs）；QueryEngine 单飞队列（NewTurn/Steering/FollowUp 三类提交，RunQuery 投递点 A 在 tool result 之后、下次 LLM 调用之前注入）；abort 时未投递 steering 以 undelivered 回执退回；REPL 两段式 Ctrl-C（第一段取消当前 query，第二段退出）；`--resume`/`--continue` 经 BuildRuntime 真实接线；JSONLines 协议新增 FRQueueMessage / BEQueued / BEDelivered。测试：session 往返与断尾恢复、`-race` 并发 Submit 串行化、steering 注入位置、follow-up 接续、abort 退回，以及 BuildRuntime→store 防拆线测试（pkg/ui/runtime_test.go）。
-- §1、§4–§10 仍为 proposed。
+- **二期部分已落地（§8.1 排序 + §1，详见 [implemented note](../../implemented/feature/2026-08-26-cache-stable-tools-and-hashline-edit.md)）**：ToolRegistry ListTools/ToAPISchema 按名称排序（tools 数组字节稳定）；Read 输出 3 字符锚点前缀 + 默认 250 行续读提示；Edit 重做为 anchors 协议（全锚点预校验 all-or-nothing、多行替换自底向上应用、temp+rename 原子写、stale/ambiguous 可行动错误）。§8.1 的 usage 解析补全（P0-5b）仍未做。
+- §4–§7、§9、§10 及 §8.2 仍为 proposed。
 
 
 
