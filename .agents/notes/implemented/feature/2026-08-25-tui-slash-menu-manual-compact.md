@@ -29,16 +29,15 @@ Scope: pkg/ui/tui.go, pkg/engine/query_engine.go, pkg/services/compact.go
    `compactDoneMsg`, prints `✔ Compacted: X → Y tokens`. Refused while a
    turn is in flight (single-flight rule).
 
-4. **Tool lines (single-line, Codex-style icon pulse)**: each tool call
+4. **Tool lines (single-line, Codex-style spinner)**: each tool call
    renders as one line `icon Name args…` — icon is the spinner frame
-   while running, `✔` green / `✖ failed` red / `⏹ interrupted` yellow
-   when settled. `openTools []toolLineRef` tracks running lines; spinner
-   ticks toggle `blink` and re-render in place, and completion/abort
-   flips the same rows (no duplicate blocks, args preserved). The
-   running animation is Codex-style: only the leading spinner icon
-   pulses (alternating `tuiToolStyle` / `tuiBlinkStyle` per tick), the
-   name (`tuiToolStyle`) and args (`tuiDimStyle`) stay stable — no
-   full-row white bar. Args render as alphabetically sorted `key=value`
+   while running (orange `tuiToolStyle`, no background flash), `✔` green
+   / `✖ failed` red / `⏹ interrupted` yellow when settled.
+   `openTools []toolLineRef` tracks running lines; spinner ticks
+   re-render the icon frame in place, and completion/abort flips the
+   same rows (no duplicate blocks, args preserved). The running
+   animation is Codex-style: only the glyph animates, name/args stay
+   stable. Args render as alphabetically sorted `key=value`
    pairs, newlines shown as `⏎`, truncated once at render time to 96
    runes. F7: same-name LIFO mismatch remains — concurrent same-name
    tools completing out of order may attribute args to the wrong row;

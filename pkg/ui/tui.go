@@ -30,12 +30,9 @@ var (
 			PaddingLeft(1)
 	tuiReasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	tuiToolStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // running tool line
-	// Running tool lines blink: reverse-video highlight toggled on each
-	// spinner tick.
-	tuiBlinkStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
-	tuiOkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	tuiErrStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	tuiWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	tuiOkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	tuiErrStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	tuiWarnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 )
 
 // slashCmd drives both the autocomplete menu and dispatch.
@@ -76,7 +73,7 @@ type hitlPromptMsg struct {
 type statusMsg struct{ text string }
 
 // toolLineRef tracks a running tool line so it can be re-rendered in
-// place (blink phase, final status).
+// place (spinner frame, final status).
 type toolLineRef struct {
 	line int // index into tuiModel.lines
 	name string
@@ -114,7 +111,6 @@ type tuiModel struct {
 	busy           bool
 	autoFollow     bool          // pinned to bottom; disabled by manual scrolling
 	awaitingFirst  bool          // query in flight, no token received yet (TTFT)
-	blink          bool          // toggled per spinner tick: running-tool highlight phase
 	openTools      []toolLineRef // running tool lines, re-rendered in place
 
 	mode     tuiMode
@@ -184,12 +180,11 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case spinner.TickMsg:
 		// Always advance and return the continuation: dropping the cmd
-		// would permanently kill the tick chain (and the blink/TTFT
+		// would permanently kill the tick chain (and the spinner/TTFT
 		// animation with it).
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		if m.busy {
-			m.blink = !m.blink
 			for _, tc := range m.openTools {
 				if tc.line < len(m.lines) { // guard against /clear etc.
 					m.lines[tc.line] = m.renderToolLine(tc.name, tc.args, toolRunning)
@@ -334,9 +329,8 @@ func (m *tuiModel) finalizeAbortedTools() {
 }
 
 // renderToolLine renders one tool call as a single line. While running
-// only the leading spinner icon pulses (alternating normal / reverse per
-// tick, Codex-style) — the name and args stay stable so the line does
-// not flash as a white bar. Settled states swap the icon but keep args:
+// only the spinner glyph animates (no background flash) — the name and
+// args stay stable:
 //
 //	⣾ Bash cmd=git status && git diff
 //	✔ Bash cmd=git status && git diff
@@ -347,12 +341,7 @@ func (m *tuiModel) renderToolLine(name, args string, st toolState) string {
 	}
 	switch st {
 	case toolRunning:
-		icon := m.spin.View()
-		if m.blink {
-			icon = tuiBlinkStyle.Render(icon)
-		} else {
-			icon = tuiToolStyle.Render(icon)
-		}
+		icon := tuiToolStyle.Render(m.spin.View())
 		return icon + " " + tuiToolStyle.Render(name) + tuiDimStyle.Render(args)
 	case toolOK:
 		return tuiOkStyle.Render("✔ " + name + args)

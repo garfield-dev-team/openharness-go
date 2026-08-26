@@ -71,11 +71,10 @@ Finalization matches by tool name with LIFO fallback (tui.go:304–309). Out-of-
    to describe the shipped single-line blink rendering.
 4. **F4/F5** — `gofmt -w` on `pkg/ui`; single truncation at render time
    (`renderToolLine` 96 runes), `summarizeToolArgs` no longer truncates.
-   F6 follow-up: full-row `Reverse+Bold` replaced by Codex-style
-   icon-only pulse (only the leading spinner alternates
-   `tuiToolStyle`/`tuiBlinkStyle`, name/args stay stable) after user
-   reported the white bar as "太抽象"; F7 recorded as known LIFO
-   limitation.
+   F6 follow-up: full-row `Reverse+Bold` white-bar flash removed per
+   user feedback ("背景不要闪") — now only the spinner glyph animates
+   (no `tuiBlinkStyle` background), name/args stay stable; F7 recorded
+   as known LIFO limitation.
 
 ## Alternatives considered
 

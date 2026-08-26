@@ -243,10 +243,10 @@ func TestToolLineReplacedOnCompletion(t *testing.T) {
 	}
 }
 
-// Spinner ticks toggle the blink highlight of running tool lines so the
+// Spinner ticks advance the spinner frame of running tool lines so the
 // loading state visibly animates. Uses the real spinner tick message so
 // the test exercises the production path.
-func TestSpinnerTickAnimatesRunningCards(t *testing.T) {
+func TestSpinnerTickAnimatesRunningToolLines(t *testing.T) {
 	_, m := tuiTestRuntime(t)
 	m.busy = true
 	upd, _ := m.Update(streamEventMsg{ev: engineToolStartEvent("Bash", `{"cmd":"sleep 1"}`)})
