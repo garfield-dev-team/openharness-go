@@ -18,10 +18,10 @@ import (
 )
 
 var (
-	tuiTitleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	tuiDimStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	tuiUserStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	tuiTextStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("15")) // assistant body text
+	tuiTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	tuiDimStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	tuiUserStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	tuiTextStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("15")) // assistant body text
 	// tuiTextBlock frames assistant body with a cyan left bar so prose is
 	// visually distinct from dim reasoning and orange tool lines.
 	tuiTextBlock = lipgloss.NewStyle().
@@ -30,12 +30,12 @@ var (
 			PaddingLeft(1)
 	tuiReasonStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	tuiToolStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // running tool line
-	// Tool lines render in place: ◇ name args… while running, then the
-	// same row flips to ✔ (green) or ✖ (red) on completion.
-	tuiToolNameStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	tuiOkStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	tuiErrStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	tuiWarnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
+	// Running tool lines blink: reverse-video highlight toggled on each
+	// spinner tick.
+	tuiBlinkStyle = lipgloss.NewStyle().Reverse(true).Bold(true)
+	tuiOkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
+	tuiErrStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	tuiWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("220"))
 )
 
 // slashCmd drives both the autocomplete menu and dispatch.
@@ -75,6 +75,23 @@ type hitlPromptMsg struct {
 
 type statusMsg struct{ text string }
 
+// toolLineRef tracks a running tool line so it can be re-rendered in
+// place (blink phase, final status).
+type toolLineRef struct {
+	line int // index into tuiModel.lines
+	name string
+	args string
+}
+
+type toolState int
+
+const (
+	toolRunning toolState = iota
+	toolOK
+	toolFail
+	toolAborted
+)
+
 // compactDoneMsg reports the result of a manual /compact run.
 type compactDoneMsg struct {
 	before, after int
@@ -95,9 +112,10 @@ type tuiModel struct {
 	cur            strings.Builder
 	curIsReasoning bool
 	busy           bool
-	autoFollow     bool // pinned to bottom; disabled by manual scrolling
-	awaitingFirst  bool // query in flight, no token received yet (TTFT)
-	openTools      []int // indices of running tool lines, replaced on completion
+	autoFollow     bool          // pinned to bottom; disabled by manual scrolling
+	awaitingFirst  bool          // query in flight, no token received yet (TTFT)
+	blink          bool          // toggled per spinner tick: running-tool highlight phase
+	openTools      []toolLineRef // running tool lines, re-rendered in place
 
 	mode     tuiMode
 	models   []services.ModelInfo
@@ -151,7 +169,9 @@ func (m *tuiModel) refreshTranscript() {
 	}
 }
 
-func (m *tuiModel) Init() tea.Cmd { return textinput.Blink }
+func (m *tuiModel) Init() tea.Cmd {
+	return tea.Batch(textinput.Blink, m.spin.Tick)
+}
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -163,11 +183,22 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
-		if !m.busy {
-			return m, nil
-		}
+		// Always advance and return the continuation: dropping the cmd
+		// would permanently kill the tick chain (and the blink/TTFT
+		// animation with it).
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
+		if m.busy {
+			m.blink = !m.blink
+			for _, tc := range m.openTools {
+				if tc.line < len(m.lines) { // guard against /clear etc.
+					m.lines[tc.line] = m.renderToolLine(tc.name, tc.args, toolRunning)
+				}
+			}
+			if len(m.openTools) > 0 {
+				m.refreshTranscript()
+			}
+		}
 		return m, cmd
 
 	case statusMsg:
@@ -260,34 +291,34 @@ func (m *tuiModel) applyStreamEvent(ev engine.StreamEventWithUsage) {
 	case engine.EventToolExecutionStarted:
 		m.awaitingFirst = false
 		m.flushCurrent()
-		line := tuiToolStyle.Render("◇ ") + tuiToolNameStyle.Render(e.ToolName) +
-			tuiDimStyle.Render(" "+summarizeToolArgs(e.ToolInput))
-		m.appendLine(line)
-		m.openTools = append(m.openTools, len(m.lines)-1)
+		args := summarizeToolArgs(e.ToolInput)
+		m.appendLine(m.renderToolLine(e.ToolName, args, toolRunning))
+		m.openTools = append(m.openTools, toolLineRef{line: len(m.lines) - 1, name: e.ToolName, args: args})
 	case engine.EventToolExecutionCompleted:
 		m.finishToolLine(e)
 	}
 }
 
-// finishToolLine flips the matching running-tool line in place to its
-// final ✔/✖ form instead of appending a new row.
+// finishToolLine flips the matching running tool line in place to its
+// final ✔/✖ state, preserving the rendered arguments.
 func (m *tuiModel) finishToolLine(e engine.StreamEvent) {
 	m.flushCurrent()
 	idx := -1
+	var args string
 	for i := len(m.openTools) - 1; i >= 0; i-- {
-		if strings.Contains(stripANSI(m.lines[m.openTools[i]]), e.ToolName) {
+		if m.openTools[i].name == e.ToolName {
 			idx = i
+			args = m.openTools[i].args
 			break
 		}
 	}
-	var line string
+	st := toolOK
 	if e.ToolResult != nil && e.ToolResult.IsError {
-		line = tuiErrStyle.Render(fmt.Sprintf("✖ %s failed", e.ToolName))
-	} else {
-		line = tuiOkStyle.Render(fmt.Sprintf("✔ %s", e.ToolName))
+		st = toolFail
 	}
+	line := m.renderToolLine(e.ToolName, args, st)
 	if idx >= 0 {
-		m.lines[m.openTools[idx]] = line
+		m.lines[m.openTools[idx].line] = line
 		m.openTools = append(m.openTools[:idx], m.openTools[idx+1:]...)
 		return
 	}
@@ -296,14 +327,41 @@ func (m *tuiModel) finishToolLine(e engine.StreamEvent) {
 
 // finalizeAbortedTools marks still-running tool lines as interrupted.
 func (m *tuiModel) finalizeAbortedTools() {
-	for _, li := range m.openTools {
-		name := strings.TrimSpace(strings.TrimPrefix(stripANSI(m.lines[li]), "◇"))
-		if i := strings.IndexAny(name, " \t"); i > 0 {
-			name = name[:i]
-		}
-		m.lines[li] = tuiWarnStyle.Render(fmt.Sprintf("⏹ %s interrupted", name))
+	for _, tc := range m.openTools {
+		m.lines[tc.line] = m.renderToolLine(tc.name, tc.args, toolAborted)
 	}
 	m.openTools = nil
+}
+
+// renderToolLine renders one tool call as a single line. While running
+// only the leading spinner icon pulses (alternating normal / reverse per
+// tick, Codex-style) — the name and args stay stable so the line does
+// not flash as a white bar. Settled states swap the icon but keep args:
+//
+//	⣾ Bash cmd=git status && git diff
+//	✔ Bash cmd=git status && git diff
+func (m *tuiModel) renderToolLine(name, args string, st toolState) string {
+	const argCap = 96
+	if args != "" {
+		args = " " + truncateArgs(args, argCap)
+	}
+	switch st {
+	case toolRunning:
+		icon := m.spin.View()
+		if m.blink {
+			icon = tuiBlinkStyle.Render(icon)
+		} else {
+			icon = tuiToolStyle.Render(icon)
+		}
+		return icon + " " + tuiToolStyle.Render(name) + tuiDimStyle.Render(args)
+	case toolOK:
+		return tuiOkStyle.Render("✔ " + name + args)
+	case toolFail:
+		return tuiErrStyle.Render("✖ " + name + " failed" + args)
+	case toolAborted:
+		return tuiWarnStyle.Render("⏹ " + name + " interrupted" + args)
+	}
+	return ""
 }
 
 // summarizeToolArgs renders tool input as sorted key=value pairs so the
@@ -315,7 +373,7 @@ func summarizeToolArgs(raw json.RawMessage) string {
 	}
 	var kv map[string]any
 	if err := json.Unmarshal(raw, &kv); err != nil || len(kv) == 0 {
-		return truncateArgs(s)
+		return s
 	}
 	keys := make([]string, 0, len(kv))
 	for k := range kv {
@@ -332,15 +390,15 @@ func summarizeToolArgs(raw json.RawMessage) string {
 		b, _ := json.Marshal(v)
 		parts = append(parts, fmt.Sprintf("%s=%s", k, b))
 	}
-	return truncateArgs(strings.Join(parts, " "))
+	return strings.Join(parts, " ")
 }
 
-func truncateArgs(s string) string {
+func truncateArgs(s string, maxRunes int) string {
+	s = strings.NewReplacer("\r", "", "\n", "⏎", "\t", " ").Replace(s)
 	s = strings.TrimSpace(s)
-	const argCap = 72
 	r := []rune(s)
-	if len(r) > argCap {
-		return string(r[:argCap]) + "…"
+	if len(r) > maxRunes {
+		return string(r[:maxRunes-1]) + "…"
 	}
 	return s
 }
@@ -500,6 +558,7 @@ func (m *tuiModel) dispatch(line string) tea.Cmd {
 	case line == "/clear":
 		m.rt.Engine.Clear()
 		m.lines = nil
+		m.openTools = nil
 		m.status = "Conversation cleared."
 		return nil
 	case line == "/compact":
@@ -726,7 +785,7 @@ func (m tuiModel) viewPicker() string {
 
 func (m tuiModel) viewHitl() string {
 	var b strings.Builder
-	b.WriteString(tuiWarnStyle.Render("? " + m.hitl.question) + "\n")
+	b.WriteString(tuiWarnStyle.Render("? "+m.hitl.question) + "\n")
 	for i, opt := range m.hitl.options {
 		b.WriteString(fmt.Sprintf("  [%d] %s\n", i+1, opt))
 	}

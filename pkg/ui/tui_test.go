@@ -195,13 +195,16 @@ func TestReasoningThenToolFlushOrder(t *testing.T) {
 	upd, _ = upd.(*tuiModel).Update(streamEventMsg{ev: engineToolStartEvent("Read", `{"path":"a.go"}`)})
 	mm := upd.(*tuiModel)
 	out := stripANSI(mm.viewTranscript())
-	if !strings.Contains(out, "pondering") || !strings.Contains(out, "◇ Read") {
-		t.Fatalf("reasoning/tool rendering broken: %q", out)
+	if !strings.Contains(out, "pondering") {
+		t.Fatalf("reasoning lost: %q", out)
+	}
+	if !strings.Contains(out, "Read") || !strings.Contains(out, "path=a.go") {
+		t.Fatalf("tool line missing name/args: %q", out)
 	}
 }
 
-// A running tool line (◇) is replaced in place by ✔/✖ on completion —
-// no duplicate rows pile up in the transcript.
+// A running tool line is replaced in place by ✔/✖ on completion —
+// arguments stay visible and no duplicate rows pile up.
 func TestToolLineReplacedOnCompletion(t *testing.T) {
 	_, m := tuiTestRuntime(t)
 	m.busy = true
@@ -210,28 +213,101 @@ func TestToolLineReplacedOnCompletion(t *testing.T) {
 	if len(mm.openTools) != 1 {
 		t.Fatalf("expected 1 open tool, got %d", len(mm.openTools))
 	}
-	if got := stripANSI(mm.viewTranscript()); !strings.Contains(got, "◇ Read limit=10 path=a.go") {
-		t.Fatalf("running tool line malformed: %q", got)
+	out := stripANSI(mm.viewTranscript())
+	if !strings.Contains(out, "Read") || !strings.Contains(out, "path=a.go") {
+		t.Fatalf("running tool line malformed: %q", out)
 	}
 	upd, _ = mm.Update(streamEventMsg{ev: engineToolDoneEvent("Read")})
 	mm = upd.(*tuiModel)
-	out := stripANSI(mm.viewTranscript())
-	if strings.Contains(out, "◇ Read") || len(mm.openTools) != 0 {
-		t.Fatalf("running tool not finalized in place: %q open=%v", out, mm.openTools)
+	out = stripANSI(mm.viewTranscript())
+	if len(mm.openTools) != 0 {
+		t.Fatalf("tool still tracked as open: %v", mm.openTools)
 	}
 	if !strings.Contains(out, "✔ Read") {
-		t.Fatalf("completion marker missing: %q", out)
+		t.Fatalf("success marker missing: %q", out)
 	}
-	if strings.Contains(out, "completed") {
-		t.Fatalf("legacy 'completed' suffix leaked: %q", out)
+	if !strings.Contains(out, "path=a.go") {
+		t.Fatalf("args dropped after completion: %q", out)
 	}
-	// Failed run renders the ✖ variant.
+	if n := strings.Count(out, "Read"); n != 1 {
+		t.Fatalf("expected exactly one line for Read, got %d: %q", n, out)
+	}
+	// Failed run renders the ✖ variant, args preserved.
 	upd, _ = mm.Update(streamEventMsg{ev: engineToolStartEvent("Bash", `{"cmd":"ls"}`)})
 	mm = upd.(*tuiModel)
 	upd, _ = mm.Update(streamEventMsg{ev: engineToolFailEvent("Bash")})
 	mm = upd.(*tuiModel)
-	if out := stripANSI(mm.viewTranscript()); !strings.Contains(out, "✖ Bash failed") {
-		t.Fatalf("failure marker missing: %q", out)
+	out = stripANSI(mm.viewTranscript())
+	if !strings.Contains(out, "✖ Bash failed") || !strings.Contains(out, "cmd=ls") {
+		t.Fatalf("failure line malformed: %q", out)
+	}
+}
+
+// Spinner ticks toggle the blink highlight of running tool lines so the
+// loading state visibly animates. Uses the real spinner tick message so
+// the test exercises the production path.
+func TestSpinnerTickAnimatesRunningCards(t *testing.T) {
+	_, m := tuiTestRuntime(t)
+	m.busy = true
+	upd, _ := m.Update(streamEventMsg{ev: engineToolStartEvent("Bash", `{"cmd":"sleep 1"}`)})
+	mm := upd.(*tuiModel)
+	before := mm.lines[mm.openTools[0].line]
+	tickMsg := mm.spin.Tick()
+	upd, cmd := mm.Update(tickMsg)
+	mm = upd.(*tuiModel)
+	if cmd == nil {
+		t.Fatal("spinner tick must keep the chain alive")
+	}
+	after := mm.lines[mm.openTools[0].line]
+	if before == after {
+		t.Fatal("spinner tick did not re-render the running line")
+	}
+	if !strings.Contains(stripANSI(after), "Bash") {
+		t.Fatalf("line content lost after tick: %q", after)
+	}
+}
+
+func TestClearDuringToolThenTickNoPanic(t *testing.T) {
+	_, m := tuiTestRuntime(t)
+	m.busy = true
+	upd, _ := m.Update(streamEventMsg{ev: engineToolStartEvent("Bash", `{"cmd":"sleep 1"}`)})
+	mm := upd.(*tuiModel)
+	mm.dispatch("/clear")
+	if len(mm.lines) != 0 || len(mm.openTools) != 0 {
+		t.Fatalf("clear must empty transcript and running-tool refs, got %d lines %d tools", len(mm.lines), len(mm.openTools))
+	}
+	tickMsg := mm.spin.Tick()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic on tick after clear: %v", r)
+		}
+	}()
+	upd, cmd := mm.Update(tickMsg)
+	if cmd == nil {
+		t.Fatal("tick chain must survive even after clear")
+	}
+	_ = upd
+}
+
+func TestSpinnerTickChainContinues(t *testing.T) {
+	_, m := tuiTestRuntime(t)
+	// Idle tick must still return the continuation.
+	tickMsg := m.spin.Tick()
+	_, cmd := m.Update(tickMsg)
+	if cmd == nil {
+		t.Fatal("idle tick must not break the chain")
+	}
+	// Busy tick must also continue.
+	m.busy = true
+	tickMsg = m.spin.Tick()
+	_, cmd = m.Update(tickMsg)
+	if cmd == nil {
+		t.Fatal("busy tick must not break the chain")
+	}
+	// Init must start the chain.
+	initCmd := m.Init()
+	if initCmd == nil {
+		t.Fatal("Init must return a tick chain")
 	}
 }
 
