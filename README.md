@@ -8,15 +8,15 @@ OpenHarness-Go 是一个基于 Go 语言开发的高性能、高可扩展的 AI 
 
 它旨在提供一个受控、安全且具有强大上下文管理能力的执行环境，适用于自动化代码开发、代码审查、系统管理以及复杂的并行任务编排。
 
-<p align="center">
-  <a href="https://github.com/garfield-dev-team/openbot">
-    <img src="docs/assets/openbot-banner.jpg" alt="OpenBot — 一群 Agent 的办公室" width="100%" />
-  </a>
-</p>
-
-<p align="center">
-  <sub>🚀 姊妹作品：如果说 OpenHarness-Go 是"单个 Agent 的引擎"，那 <a href="https://github.com/garfield-dev-team/openbot"><b>OpenBot</b></a> 就是"一群 Agent 的办公室" —— 多 Agent 群聊 · 任务看板 · 审批流 · 定时 Routines</sub>
-</p>
+> [!TIP]
+> **🚀 喜欢 OpenHarness-Go？看看它的姊妹作品 [OpenBot](https://github.com/garfield-dev-team/openbot)！**
+>
+> 🤖 一个本地多 Agent 协作工作区（Next.js 15 + React 19），复刻 Grok Bot / Hermes Agent 的核心心智模型：
+> - **多 Agent 群聊**：@mention 点名应答、串行轮转讨论、`(pass)` 沉默协议、异议高亮——像管理一个真实的团队
+> - **任务账本 + 看板/日历**：Agent 通过结构化协议自主建任务、交证据、互派工作，owner 不能自验通过自己的任务（内置治理规则）
+> - **审批两段式 & 定时 Routines**：高危动作先审批后执行，cron 定时投递任务到 Bot 常驻会话
+>
+> 如果说 OpenHarness-Go 是"单个 Agent 的引擎"，那 OpenBot 就是"一群 Agent 的办公室"。👉 [garfield-dev-team/openbot](https://github.com/garfield-dev-team/openbot)
 
 ## 🌟 核心特性
 
