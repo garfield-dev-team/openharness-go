@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -66,10 +67,10 @@ type BaseToolHelper struct {
 	ReadOnly        bool
 }
 
-func (h *BaseToolHelper) Name() string                        { return h.ToolName }
-func (h *BaseToolHelper) Description() string                 { return h.ToolDescription }
-func (h *BaseToolHelper) InputSchema() map[string]any         { return h.Schema }
-func (h *BaseToolHelper) IsReadOnly(_ json.RawMessage) bool   { return h.ReadOnly }
+func (h *BaseToolHelper) Name() string                      { return h.ToolName }
+func (h *BaseToolHelper) Description() string               { return h.ToolDescription }
+func (h *BaseToolHelper) InputSchema() map[string]any       { return h.Schema }
+func (h *BaseToolHelper) IsReadOnly(_ json.RawMessage) bool { return h.ReadOnly }
 func (h *BaseToolHelper) ToAPISchema() map[string]any {
 	return map[string]any{
 		"name":         h.ToolName,
@@ -108,7 +109,9 @@ func (r *ToolRegistry) Get(name string) BaseTool {
 	return r.tools[name]
 }
 
-// ListTools returns all registered tools.
+// ListTools returns all registered tools sorted by name. The order must be
+// deterministic: this slice feeds provider requests and prompt assembly, and
+// map iteration order would silently invalidate provider-side prompt caches.
 func (r *ToolRegistry) ListTools() []BaseTool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -116,15 +119,17 @@ func (r *ToolRegistry) ListTools() []BaseTool {
 	for _, t := range r.tools {
 		result = append(result, t)
 	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name() < result[j].Name() })
 	return result
 }
 
-// ToAPISchema returns the API schema for every registered tool.
+// ToAPISchema returns the API schema for every registered tool, sorted by
+// tool name so the tools array sent to the LLM is byte-stable across turns
+// (protects the provider prompt-cache prefix).
 func (r *ToolRegistry) ToAPISchema() []map[string]any {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	result := make([]map[string]any, 0, len(r.tools))
-	for _, t := range r.tools {
+	ordered := r.ListTools()
+	result := make([]map[string]any, 0, len(ordered))
+	for _, t := range ordered {
 		result = append(result, t.ToAPISchema())
 	}
 	return result

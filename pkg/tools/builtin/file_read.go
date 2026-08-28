@@ -8,12 +8,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/openharness/openharness/pkg/hashline"
 	"github.com/openharness/openharness/pkg/tools"
 )
 
 // ---------------------------------------------------------------------------
-// FileReadTool – read a file, optionally with offset/limit.
+// FileReadTool – read a file with content anchors, optionally offset/limit.
 // ---------------------------------------------------------------------------
+
+// defaultReadLimit bounds a single Read so the model gets an actionable
+// truncation hint instead of an oversized dump.
+const defaultReadLimit = 250
 
 // FileReadInput is the expected JSON input for FileReadTool.
 type FileReadInput struct {
@@ -27,12 +32,17 @@ type FileReadTool struct {
 	tools.BaseToolHelper
 }
 
+const readToolDescription = `Read the contents of a file. Every line is prefixed with a 3-character ` +
+	`content anchor (e.g. "aB9|func main() {"). To edit lines, pass these anchors to the Edit tool — ` +
+	`do not re-type whole lines as search text. Defaults to ` + "250" + ` lines; ` +
+	`if output is truncated, call again with "offset" to continue.`
+
 // NewFileReadTool creates a FileReadTool instance.
 func NewFileReadTool() *FileReadTool {
 	return &FileReadTool{
 		BaseToolHelper: tools.BaseToolHelper{
 			ToolName:        "Read",
-			ToolDescription: "Read the contents of a file, optionally specifying a line offset and limit.",
+			ToolDescription: readToolDescription,
 			ReadOnly:        true,
 			Schema: map[string]any{
 				"type": "object",
@@ -47,7 +57,7 @@ func NewFileReadTool() *FileReadTool {
 					},
 					"limit": map[string]any{
 						"type":        "integer",
-						"description": "Maximum number of lines to return.",
+						"description": "Maximum number of lines to return (default 250).",
 					},
 				},
 				"required": []string{"file_path"},
@@ -56,7 +66,7 @@ func NewFileReadTool() *FileReadTool {
 	}
 }
 
-// Execute reads the file content.
+// Execute reads the file content and renders it in anchor format.
 func (t *FileReadTool) Execute(_ context.Context, input json.RawMessage, execCtx *tools.ToolExecutionContext) (*tools.ToolResult, error) {
 	var in FileReadInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -77,6 +87,9 @@ func (t *FileReadTool) Execute(_ context.Context, input json.RawMessage, execCtx
 	}
 
 	lines := strings.Split(string(data), "\n")
+	if n := len(lines); n > 0 && lines[n-1] == "" {
+		lines = lines[:n-1] // trailing newline is not a line
+	}
 
 	offset := 0
 	if in.Offset != nil && *in.Offset > 0 {
@@ -86,13 +99,15 @@ func (t *FileReadTool) Execute(_ context.Context, input json.RawMessage, execCtx
 		offset = len(lines)
 	}
 
-	end := len(lines)
+	limit := defaultReadLimit
 	if in.Limit != nil && *in.Limit > 0 {
-		if offset+*in.Limit < end {
-			end = offset + *in.Limit
-		}
+		limit = *in.Limit
 	}
+	end := min(offset+limit, len(lines))
 
-	selected := lines[offset:end]
-	return tools.NewToolResult(strings.Join(selected, "\n")), nil
+	out := hashline.Encode(lines[offset:end])
+	if end < len(lines) {
+		out += fmt.Sprintf("... (%d more lines; call Read again with offset=%d to continue)\n", len(lines)-end, end)
+	}
+	return tools.NewToolResult(out), nil
 }

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -318,26 +319,7 @@ func (qe *QueryEngine) executeRun(ctx context.Context, qs queuedSubmission) {
 	qe.mu.Unlock()
 
 	// Run compaction before the loop
-	summarizeFn := func(sCtx context.Context, p string) (string, error) {
-		params := LLMRequestParams{
-			Model:        qe.model,
-			SystemPrompt: "You are a conversation summarizer.",
-			Messages:     []types.ConversationMessage{types.FromUserText(p)},
-			MaxTokens:    4096,
-		}
-		ch, err := qe.apiClient.StreamMessage(sCtx, params)
-		if err != nil {
-			return "", err
-		}
-		var summary strings.Builder
-		for ev := range ch {
-			if ev.Err != nil {
-				return "", ev.Err
-			}
-			summary.WriteString(ev.TextDelta)
-		}
-		return summary.String(), nil
-	}
+	summarizeFn := qe.summarizer()
 
 	config := qe.compactionConfig
 	if config == nil {
@@ -489,4 +471,62 @@ func (qe *QueryEngine) CompactionThreshold() int {
 		return qe.compactionConfig.TokenThreshold
 	}
 	return services.ThresholdForModel(qe.model)
+}
+
+// summarizer returns the L5 summary callback: one extra LLM call that
+// condenses old history into a structured summary.
+func (qe *QueryEngine) summarizer() func(context.Context, string) (string, error) {
+	return func(sCtx context.Context, p string) (string, error) {
+		params := LLMRequestParams{
+			Model:        qe.model,
+			SystemPrompt: "You are a conversation summarizer.",
+			Messages:     []types.ConversationMessage{types.FromUserText(p)},
+			MaxTokens:    4096,
+		}
+		ch, err := qe.apiClient.StreamMessage(sCtx, params)
+		if err != nil {
+			return "", err
+		}
+		var summary strings.Builder
+		for ev := range ch {
+			if ev.Err != nil {
+				return "", ev.Err
+			}
+			summary.WriteString(ev.TextDelta)
+		}
+		return summary.String(), nil
+	}
+}
+
+// CompactNow runs the full compaction pipeline immediately regardless of
+// threshold and swaps the result into the conversation history. It returns
+// estimated tokens before and after.
+func (qe *QueryEngine) CompactNow(ctx context.Context) (int, int, error) {
+	qe.mu.Lock()
+	msgs := make([]types.ConversationMessage, len(qe.Messages))
+	copy(msgs, qe.Messages)
+	var collapseBufferCopy []types.ConversationMessage
+	if qe.collapseBuffer != nil {
+		collapseBufferCopy = make([]types.ConversationMessage, len(qe.collapseBuffer))
+		copy(collapseBufferCopy, qe.collapseBuffer)
+	}
+	config := qe.compactionConfig
+	if config == nil {
+		config = services.ResolveCompactionConfig(qe.model, 0, 0)
+	}
+	qe.mu.Unlock()
+
+	before := services.EstimateMessageTokens(msgs)
+	forced := *config
+	forced.ForceCompact = true
+	compactedMsgs, err := services.RunPipeline(ctx, msgs, &forced, &collapseBufferCopy, qe.summarizer())
+	if err != nil {
+		return before, before, fmt.Errorf("compact failed: %w", err)
+	}
+
+	qe.mu.Lock()
+	qe.Messages = compactedMsgs
+	qe.collapseBuffer = collapseBufferCopy
+	qe.mu.Unlock()
+	return before, services.EstimateMessageTokens(compactedMsgs), nil
 }
